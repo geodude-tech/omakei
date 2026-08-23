@@ -1,0 +1,10 @@
+#!/bin/sh
+# Guards that must hold for every commit. Enable in a fresh clone with:
+#   git config core.hooksPath .githooks
+set -e
+
+# Personal statements and ledgers must never enter git.
+node scripts/check-no-statements.mjs
+
+# dist/ is committed, so it has to match the sources being committed.
+node scripts/check-dist-fresh.mjs

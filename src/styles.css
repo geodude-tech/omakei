@@ -1,4 +1,11 @@
-@import "tailwindcss";
+/* Scan only real sources. dist/ is committed, and letting Tailwind
+   auto-detect would make each build scan the previous bundle and
+   emit every class name it found there. */
+@import "tailwindcss" source(none);
+@source "./";
+@source "../index.html";
+/* Emits the <html> classes, so Tailwind must see them too. */
+@source "../scripts/page-shell.mjs";
 @import "tw-animate-css";
 @import "./theme-defaults.css";
 
