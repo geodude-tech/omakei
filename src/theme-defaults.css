@@ -1,0 +1,50 @@
+@theme {
+  --color-background: #f3efe7;
+  --color-foreground: #1c1914;
+  --color-card: #fbf8f3;
+  --color-card-foreground: #1c1914;
+  --color-popover: #fffcf7;
+  --color-popover-foreground: #1c1914;
+  --color-primary: #2a4038;
+  --color-primary-foreground: #f3efe7;
+  --color-secondary: #e8e1d4;
+  --color-secondary-foreground: #1c1914;
+  --color-muted: #ece6db;
+  --color-muted-foreground: #6f6a62;
+  --color-accent: #e4ddd0;
+  --color-accent-foreground: #1c1914;
+  --color-destructive: #8b4a3a;
+  --color-destructive-foreground: #fbf8f3;
+  --color-border: #e0d8cb;
+  --color-input: #e0d8cb;
+  --color-ring: #2a4038;
+  --color-income: #3d6b54;
+  --color-spend: #8b4a3a;
+  --color-reserved: #8c7a5c;
+  --color-chart-1: #2a4038;
+  --color-chart-2: #4d6359;
+  --color-chart-3: #6e7f70;
+  --color-chart-4: #8c7a5c;
+  --color-chart-5: #a39074;
+  --color-chart-6: #b8a88e;
+  --color-chart-7: #cfc3b0;
+  --color-sidebar: #ebe4d8;
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius: 12px;
+
+  --font-sans: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Fraunces", "Times New Roman", serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --shadow-border: 0px 0px 0px 1px rgba(28, 25, 20, 0.06),
+    0px 1px 2px -1px rgba(28, 25, 20, 0.06),
+    0px 2px 4px 0px rgba(28, 25, 20, 0.04);
+  --shadow-border-hover: 0px 0px 0px 1px rgba(28, 25, 20, 0.08),
+    0px 1px 2px -1px rgba(28, 25, 20, 0.08),
+    0px 2px 4px 0px rgba(28, 25, 20, 0.06);
+}

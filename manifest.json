@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "omakei",
+  "name": "Omakei",
+  "version": "1.0.0",
+  "author": "Andrew Scholz",
+  "license": "MIT",
+  "description": "This month's leftover on the Omarchy bar. Attach a folder of statements on this machine. Nothing is uploaded.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omakei",
+    "description": "This month's leftover after spend and set-asides",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "appUrl": "http://127.0.0.1:8080/"
+    },
+    "schema": [
+      { "key": "ledgerPath", "type": "string", "label": "Ledger file", "defaultValue": "", "description": "Path to the omakei-ledger.json in the folder you attached in Omakei. Set this yourself; Omakei does not write it for you." },
+      { "key": "appUrl", "type": "string", "label": "Omakei URL" }
+    ]
+  }
+}
