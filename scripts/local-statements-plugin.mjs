@@ -28,7 +28,10 @@ export function readEnvValue(text, key) {
     if (!trimmed || trimmed.startsWith("#")) continue;
     const eq = trimmed.indexOf("=");
     if (eq < 0) continue;
-    const name = trimmed.slice(0, eq).trim().replace(/^export\s+/, "");
+    const name = trimmed
+      .slice(0, eq)
+      .trim()
+      .replace(/^export\s+/, "");
     if (name !== key) continue;
     let value = trimmed.slice(eq + 1).trim();
     if (
@@ -102,11 +105,11 @@ function safeJoin(root, rel) {
 export function isLedgerPayload(value) {
   return Boolean(
     value &&
-      typeof value === "object" &&
-      value.version === 1 &&
-      Array.isArray(value.transactions) &&
-      Array.isArray(value.rules) &&
-      value.isSample !== true,
+    typeof value === "object" &&
+    value.version === 1 &&
+    Array.isArray(value.transactions) &&
+    Array.isArray(value.rules) &&
+    value.isSample !== true,
   );
 }
 

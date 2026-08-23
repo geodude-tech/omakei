@@ -40,7 +40,10 @@ test("resolveStatementsDir prefers process env over dotenv text", () => {
 
 test("expandHome handles ~ and ~/path", () => {
   assert.equal(expandHome("~", "/home/user"), "/home/user");
-  assert.equal(expandHome("~/Financial_Statements", "/home/user"), "/home/user/Financial_Statements");
+  assert.equal(
+    expandHome("~/Financial_Statements", "/home/user"),
+    "/home/user/Financial_Statements",
+  );
   assert.equal(expandHome("/abs/path", "/home/user"), "/abs/path");
 });
 

@@ -12,13 +12,15 @@ omarchy plugin add https://github.com/geodude-tech/omakei.git --enable
 
 Review the QML before you enable it. Like every Omarchy shell plugin, it runs unsandboxed — with your user permissions, on this machine only. Omakei does not send your statements or ledger anywhere.
 
+Nothing else to install: the editor ships prebuilt, and needs only Node, which Omarchy already has.
+
 Update later with `omarchy plugin update omakei`.
 
 ## First run
 
 You do not need a ledger yet.
 
-1. Click the **Omakei** pill on the bar (or **Open Omakei** in the popup).
+1. Click the **Omakei** pill on the bar (or **Open Omakei** in the popup). The editor starts the first time you open it, which takes about a second; nothing runs in the background while Omakei is closed.
 2. Choose the folder that holds your transaction statements — any folder you already use, or an empty one you will drop exports into.
 3. Omakei reads the files, auto-categorizes what it knows, and writes `omakei-ledger.json` into that same folder.
 4. The pill shows this month’s net. It updates when the ledger file changes.
@@ -50,10 +52,25 @@ In the popup: `[` / `]` change month, `t` jumps to this month, `o` opens Omakei,
 
 Statements and the generated ledger stay in the folder you attached. Removing the plugin does not delete that folder. There is no account, no cloud, and no telemetry.
 
+The editor listens on `127.0.0.1` only, so nothing else on your network can reach it.
+
 ## Remove
 
 ```sh
 omarchy plugin remove omakei
+```
+
+If the editor is still running, close it with `pkill -f omakei-serve`.
+
+## Building it yourself
+
+`dist/` is committed so installing needs no build step. To rebuild after changing
+anything under `src/`:
+
+```sh
+npm install
+npm run build     # writes dist/
+npm run dev       # or work against the dev server on 127.0.0.1:8080
 ```
 
 ## License

@@ -5,7 +5,8 @@
 import { execFileSync } from "node:child_process";
 
 const BLOCKED = /\.(csv|tsv|ofx|qfx|ofc)$/i;
-const BLOCKED_PATH = /(^|\/)(Financial_Statements|statements|data\/statements)(\/|$)|(folio|omakei)-ledger\.json$/i;
+const BLOCKED_PATH =
+  /(^|\/)(Financial_Statements|statements|data\/statements)(\/|$)|(folio|omakei)-ledger\.json$/i;
 
 const tracked = execFileSync("git", ["ls-files", "-z"], { encoding: "buffer" })
   .toString("utf8")

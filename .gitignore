@@ -1,9 +1,5 @@
 node_modules
 .node_modules.lock
-.vercel
-.tanstack
-.output
-dist
 *.log
 .env
 .env.*

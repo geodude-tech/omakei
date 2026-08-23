@@ -295,8 +295,11 @@ function shellQuote(value) {
   return "'" + String(value || "").replace(/'/g, "'\\''") + "'"
 }
 
-function openEditorCommand(base, summary) {
+function openEditorCommand(base, summary, pluginDir) {
   var url = editorUrl(base, summary)
   if (!url) return ""
+  if (pluginDir) {
+    return shellQuote(String(pluginDir).replace(/\/$/, "") + "/scripts/omakei-open") + " " + shellQuote(url)
+  }
   return "omarchy launch browser " + shellQuote(url)
 }

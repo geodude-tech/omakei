@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Omakei</title>
+    <meta
+      name="description"
+      content="Import bank, credit card, and mortgage statements into one clean ledger with a crisp monthly spend overview."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!--omakei:head-->
+  </head>
+  <body>
+    <style>
+      @keyframes folio-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+    <div
+      id="folio-boot"
+      style="
+        position: fixed;
+        inset: 0;
+        z-index: 80;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--color-background, #111);
+      "
+    >
+      <div
+        aria-label="Loading ledger"
+        style="
+          width: 32px;
+          height: 32px;
+          border: 2px solid color-mix(in srgb, var(--color-foreground, #fff) 20%, transparent);
+          border-top-color: var(--color-foreground, #fff);
+          border-radius: 50%;
+          animation: folio-spin 0.7s linear infinite;
+        "
+      ></div>
+    </div>
+    <!--omakei:boot-->
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

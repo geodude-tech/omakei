@@ -8,8 +8,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const OMARCHY_THEME_JS_ID = "virtual:omarchy-theme";
-
 const HEX = /^#([0-9a-fA-F]{6})$/;
 
 const FALLBACK = {
@@ -275,32 +273,4 @@ h3 {
   color: ${theme.foreground};
 }
 `;
-}
-
-/**
- * @param {ReturnType<typeof mapOmarchyColors>} theme
- */
-export function renderOmarchyThemeJs(theme) {
-  const payload = theme?.enabled
-    ? {
-        enabled: true,
-        mode: theme.mode,
-        name: theme.name ?? "",
-        background: theme.background,
-        foreground: theme.foreground,
-        accent: theme.accent,
-        css: renderOmarchyThemeCss(theme),
-      }
-    : { ...FALLBACK, css: "" };
-  return `export const omarchyTheme = ${JSON.stringify(payload)};\n`;
-}
-
-export function omarchyPwaColors(theme) {
-  if (!theme?.enabled) {
-    return { background_color: "#F3EFE7", theme_color: "#2A4038" };
-  }
-  return {
-    background_color: theme.background.toUpperCase(),
-    theme_color: theme.accent.toUpperCase(),
-  };
 }

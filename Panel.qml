@@ -108,12 +108,19 @@ Panel {
     applyLedger()
   }
 
+  /** Directory this plugin was cloned into, so the opener can be found. */
+  readonly property string pluginDir: {
+    var dir = Qt.resolvedUrl(".").toString()
+    if (dir.indexOf("file://") === 0) dir = dir.substring(7)
+    return dir.replace(/\/$/, "")
+  }
+
   function openOmakei() {
     var url = Model.editorUrl(root.appUrl, root.monthSummary)
-    var cmd = Model.openEditorCommand(root.appUrl, root.monthSummary)
+    var cmd = Model.openEditorCommand(root.appUrl, root.monthSummary, root.pluginDir)
     if (!cmd) return
     if (root.bar) root.bar.run(cmd)
-    else Quickshell.execDetached(["omarchy", "launch", "browser", url])
+    else Quickshell.execDetached([root.pluginDir + "/scripts/omakei-open", url])
     root.close()
   }
 

@@ -29,10 +29,49 @@ test("editorUrl copies month cell values onto the Omakei URL", () => {
     Model.editorUrl("http://127.0.0.1:8080/", summary),
     "http://127.0.0.1:8080/?m=2026-08&sp=4312.55&inc=8200&n=3387.45&u=17&r=500&sa=tax%09Filing%20taxes%09500",
   );
-  assert.equal(Model.editorUrl("http://127.0.0.1:8080/", Model.emptySummary("2026-08")), "http://127.0.0.1:8080/");
+  assert.equal(
+    Model.editorUrl("http://127.0.0.1:8080/", Model.emptySummary("2026-08")),
+    "http://127.0.0.1:8080/",
+  );
   assert.equal(
     Model.openEditorCommand("http://127.0.0.1:8080/", summary),
     "omarchy launch browser 'http://127.0.0.1:8080/?m=2026-08&sp=4312.55&inc=8200&n=3387.45&u=17&r=500&sa=tax%09Filing%20taxes%09500'",
+  );
+});
+
+test("openEditorCommand uses the plugin's opener when it knows where it lives", () => {
+  const summary = {
+    hasData: true,
+    month: "2026-08",
+    spent: 1,
+    income: 2,
+    net: 1,
+    uncategorized: 0,
+    allocated: 0,
+    setAsides: [],
+  };
+  const url = Model.editorUrl("http://127.0.0.1:8080/", summary);
+  assert.equal(
+    Model.openEditorCommand(
+      "http://127.0.0.1:8080/",
+      summary,
+      "/home/user/.config/omarchy/plugins/omakei",
+    ),
+    `'/home/user/.config/omarchy/plugins/omakei/scripts/omakei-open' '${url}'`,
+  );
+  // A trailing slash on the plugin dir must not double up.
+  assert.equal(
+    Model.openEditorCommand("http://127.0.0.1:8080/", summary, "/plugins/omakei/"),
+    `'/plugins/omakei/scripts/omakei-open' '${url}'`,
+  );
+  // No ledger yet still opens the editor — just with no cell values to carry.
+  assert.equal(
+    Model.openEditorCommand(
+      "http://127.0.0.1:8080/",
+      Model.emptySummary("2026-08"),
+      "/plugins/omakei",
+    ),
+    "'/plugins/omakei/scripts/omakei-open' 'http://127.0.0.1:8080/'",
   );
 });
 

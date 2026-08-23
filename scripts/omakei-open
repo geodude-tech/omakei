@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Open the ledger editor, starting it first if nothing is serving yet.
+#
+# `omarchy plugin add` clones this tree but never runs npm, so the editor is
+# not a service and nothing starts it at login. The widget calls this instead:
+# it costs nothing while Omakei is closed and about a second when it is.
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+URL="${1:-http://127.0.0.1:8080/}"
+ORIGIN="$(printf '%s' "$URL" | sed -E 's#^([a-zA-Z]+://[^/]+).*#\1#')"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omakei"
+LOG="$STATE/server.log"
+
+serving() { curl -sf -o /dev/null --max-time 1 "$ORIGIN/" 2>/dev/null; }
+open_browser() {
+  if command -v omarchy >/dev/null 2>&1; then omarchy launch browser "$URL"
+  else xdg-open "$URL" >/dev/null 2>&1
+  fi
+}
+
+if serving; then
+  open_browser
+  exit 0
+fi
+
+if [ ! -f "$ROOT/dist/index.html" ]; then
+  notify-send "Omakei" "No build found in $ROOT/dist" 2>/dev/null
+  echo "omakei: no build at $ROOT/dist — run: npm install && npm run build" >&2
+  exit 1
+fi
+
+# Host and port follow the widget's Omakei URL setting.
+host="${ORIGIN#*://}"
+port="${host##*:}"
+[ "$port" = "$host" ] && port=8080
+host="${host%%:*}"
+
+mkdir -p "$STATE"
+OMAKEI_HOST="$host" OMAKEI_PORT="$port" \
+  setsid nohup node "$ROOT/scripts/omakei-serve.mjs" >>"$LOG" 2>&1 </dev/null &
+
+for _ in $(seq 1 40); do
+  if serving; then
+    open_browser
+    exit 0
+  fi
+  sleep 0.25
+done
+
+notify-send "Omakei" "Editor did not start — see $LOG" 2>/dev/null
+echo "omakei: server did not come up; see $LOG" >&2
+exit 1
