@@ -36,6 +36,12 @@ export default tseslint.config(
     },
   },
   {
+    // Every panel exports `meta` alongside its component: that pairing is the
+    // panel contract, so the fast-refresh rule can never be satisfied here.
+    files: ["src/panels/*.tsx"],
+    rules: { "react-refresh/only-export-components": "off" },
+  },
+  {
     // Loaded by the QML JS engine, not by a bundler. Every function here is
     // reached from QML, so unused-symbol analysis reports only noise.
     files: ["Model.js"],

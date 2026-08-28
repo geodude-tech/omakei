@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -35,8 +35,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CATEGORY_BY_ID, categoryName } from "@/lib/finance/categories";
+import { categoryName } from "@/lib/finance/categories";
 import { exportLedgerCsv, isIncome, isSpend } from "@/lib/finance/ledger";
+import { categoryTotals } from "@/lib/finance/summaries.ts";
+import { PanelGrid } from "@/lib/panels/panel-grid.tsx";
 import { isTransferTx } from "@/lib/finance/transfers";
 import { bootLedger } from "@/lib/finance/boot";
 import { saveLedgerNow, setLedgerWritable } from "@/lib/finance/ledger-file";
@@ -62,20 +64,8 @@ import {
   shiftMonth,
 } from "@/lib/utils";
 
-const DailySpendChart = lazy(() => import("@/components/omakei/daily-spend-chart"));
-
 const MERCHANT_PAGE_SIZE = 12;
 const TX_PAGE_SIZE = 40;
-
-const CHART_COLORS = [
-  "var(--color-chart-1)",
-  "var(--color-chart-2)",
-  "var(--color-chart-3)",
-  "var(--color-chart-4)",
-  "var(--color-chart-5)",
-  "var(--color-chart-6)",
-  "var(--color-chart-7)",
-];
 
 export function Dashboard() {
   const transactions = useLedgerStore((s) => s.transactions);
@@ -156,7 +146,6 @@ export function Dashboard() {
 
   const stats = useMemo(() => summarize(monthTx, setAsides), [monthTx, setAsides]);
   const cats = useMemo(() => categoryTotals(monthTx), [monthTx]);
-  const daily = useMemo(() => dailySpend(selectedMonth, monthTx), [selectedMonth, monthTx]);
   const unknowns = useMemo(
     () => (detailsReady ? unknownMerchants(transactions) : []),
     [detailsReady, transactions],
@@ -412,53 +401,13 @@ export function Dashboard() {
           />
         </section>
 
-        <div className="grid gap-4 lg:grid-cols-5">
-          <Card className="lg:col-span-3">
-            <CardHeader><CardTitle>Where it went</CardTitle></CardHeader>
-            <CardContent>
-              {!detailsReady ? (
-                <Skeleton className="h-40" />
-              ) : cats.length === 0 ? (
-                <p className="py-10 text-sm text-muted-foreground">No spending this month.</p>
-              ) : (
-                <ul className="flex flex-col gap-3">
-                  {cats.map((row, i) => (
-                    <li key={row.id}>
-                      <div className="mb-1 flex items-baseline justify-between gap-3">
-                        <span className="text-sm">{row.name}</span>
-                        <span className="text-sm tabular-nums">{formatMoney(row.total)}</span>
-                      </div>
-                      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                        <div
-                          className="h-full rounded-full"
-                          style={{
-                            width: `${Math.max(4, (row.total / cats[0]!.total) * 100)}%`,
-                            background: CHART_COLORS[i % CHART_COLORS.length],
-                          }}
-                        />
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="lg:col-span-2">
-            <CardHeader><CardTitle>Daily spend</CardTitle></CardHeader>
-            <CardContent>
-              <div className="h-52">
-                {detailsReady ? (
-                  <Suspense fallback={<Skeleton className="h-full" />}>
-                    <DailySpendChart data={daily} />
-                  </Suspense>
-                ) : (
-                  <Skeleton className="h-full" />
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        <PanelGrid
+          ready={detailsReady}
+          transactions={transactions}
+          month={selectedMonth}
+          monthTransactions={monthTx}
+          setAsides={setAsides}
+        />
 
         {detailsReady && unknowns.length > 0 ? (
           <UnknownPanel
@@ -769,30 +718,4 @@ function Pager({
   );
 }
 
-function categoryTotals(rows: Transaction[]) {
-  const map = new Map<string, number>();
-  for (const tx of rows) {
-    if (!isSpend(tx)) continue;
-    const id = tx.categoryId ?? "other";
-    map.set(id, (map.get(id) ?? 0) + Math.abs(tx.amount));
-  }
-  return [...map.entries()]
-    .map(([id, total]) => ({ id, name: CATEGORY_BY_ID[id]?.name ?? "Other", total }))
-    .sort((a, b) => b.total - a.total);
-}
 
-function dailySpend(month: string, rows: Transaction[]) {
-  const [y, m] = month.split("-").map(Number);
-  const days = new Date(y, m, 0).getDate();
-  const totals = Array.from({ length: days }, () => 0);
-  for (const tx of rows) {
-    if (!isSpend(tx)) continue;
-    const d = Number(tx.date.slice(8, 10));
-    if (d >= 1 && d <= days) totals[d - 1] += Math.abs(tx.amount);
-  }
-  return totals.map((spent, i) => ({
-    day: String(i + 1),
-    spent: Math.round(spent * 100) / 100,
-    label: formatDay(`${month}-${String(i + 1).padStart(2, "0")}`),
-  }));
-}

@@ -6,9 +6,8 @@
  * than the rest of the editor combined.
  */
 import { useState } from "react";
+import type { DailySpend } from "@/lib/finance/summaries.ts";
 import { formatMoney } from "@/lib/utils.ts";
-
-export type DailySpend = { day: string; spent: number; label: string };
 
 const GAP = 0.25; // share of each slot left as spacing between bars
 

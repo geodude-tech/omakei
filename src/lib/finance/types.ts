@@ -65,3 +65,28 @@ export const ACCOUNT_KIND_LABEL: Record<AccountKind, string> = {
   mortgage: "Mortgage",
   other: "Other",
 };
+
+/**
+ * What a dashboard panel receives. Panels are read-only views over the ledger:
+ * they render, they never write. Keep this additive — fields may be added, but
+ * existing ones keep their meaning so already-written panels keep working.
+ */
+export interface PanelProps {
+  /** Every transaction, every month. Trend panels need the history. */
+  transactions: Transaction[];
+  /** The selected month, "YYYY-MM". */
+  month: string;
+  /** `transactions` filtered to `month`, so panels don't each refilter. */
+  monthTransactions: Transaction[];
+  setAsides: SetAside[];
+}
+
+/** Declared by every panel alongside its default export. */
+export interface PanelMeta {
+  /** Card title. The panel renders the contents; the frame draws the header. */
+  title: string;
+  /** Columns in the five-wide panel grid. Default 2. */
+  span?: 1 | 2 | 3 | 4 | 5;
+  /** Ascending. Default 100; ties broken by filename. */
+  order?: number;
+}
