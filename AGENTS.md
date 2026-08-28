@@ -77,6 +77,9 @@ Build inputs are listed in `scripts/build-inputs.mjs`. Tests are excluded; QML a
 ## Data
 
 - Personal statements and `omakei-ledger.json` are gitignored. Never commit them.
+- `scripts/check-no-personal-data.mjs` reads staged content in the pre-commit hook and every tracked file in `npm test`. It catches data with a recognisable shape — card numbers, SSNs, routing and account numbers, IBANs, real email addresses, personal phone numbers, street addresses. It **cannot** tell that a merchant, a balance, or a name is yours; that judgement is the rule below, and review is what enforces it. Treat a clean run as one guard passing, not as proof the diff is safe.
+- For household-specific words, put them one per line in `.githooks/personal-terms`, which is gitignored — a committed block list would itself be the leak. Matches are reported as `[redacted]`.
+- A line that must keep a matching string carries `omakei:allow-personal`, on that line or the one above it. Use it for a merchant's public support number, not to silence a real hit.
 - Never put personal data in tests, fixtures, comments, or default rules: no household-specific merchants, account numbers, balances, addresses, or family names. Invent neutral values; a test that needs a merchant should use a well-known national chain.
 - Statement file extensions are gitignored, so parser fixtures are **inline strings** in `parse.test.ts`, never files.
 - No default ledger path. Nothing is attached until the user picks a folder.

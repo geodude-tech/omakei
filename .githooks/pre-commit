@@ -6,5 +6,8 @@ set -e
 # Personal statements and ledgers must never enter git.
 node scripts/check-no-statements.mjs
 
+# Neither may personal data pasted into a file that is otherwise fine.
+node scripts/check-no-personal-data.mjs --staged
+
 # dist/ is committed, so it has to match the sources being committed.
 node scripts/check-dist-fresh.mjs

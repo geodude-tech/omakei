@@ -23,6 +23,7 @@ test("ruleMatches key identifier ignores town and store number", () => {
   assert.equal(ruleMatches("check", "CHECK"), true);
   assert.equal(ruleMatches("check", "CHECKCARD 1234 SAFEWAY"), false);
   assert.equal(ruleMatches("blue sparrow", "CITY HOSPITAL BLUE SPARROWSEATTLE WA"), true);
+  // omakei:allow-personal — a merchant's public support line, as it appears on a statement
   assert.equal(ruleMatches("steamgames", "STEAMGAMES.COM 425-889-9642 WA"), true);
 });
 
