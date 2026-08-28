@@ -276,6 +276,51 @@ test("OMAKEI_STATEMENTS_DIR seeds the same state an attach would write", async (
   assert.equal(parseStateFile(readFileSync(api.statePath, "utf8")).statementsDir, statements);
 });
 
+/*
+ * The seed only seeds. These two pin why `npm run dev:isolated` moves
+ * XDG_STATE_HOME rather than making the env var win: a saved folder always
+ * beats the variable, so the only way to develop off a sandbox is to develop
+ * against a state dir that has no saved folder in it.
+ */
+
+test("a saved folder beats OMAKEI_STATEMENTS_DIR", async () => {
+  const { home, root, statements } = tempTree();
+  const stateDir = join(home, ".state", "omakei");
+  const sandbox = join(root, "sandbox");
+  mkdirSync(sandbox, { recursive: true });
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(join(stateDir, "state.json"), renderStateFile(statements));
+
+  const api = createLedgerApi({
+    env: { XDG_STATE_HOME: join(home, ".state"), OMAKEI_STATEMENTS_DIR: sandbox },
+    home,
+  });
+
+  // The attached folder wins, and the seed does not rewrite it.
+  assert.equal((await api.stateBody()).folder.path, statements);
+  assert.equal(parseStateFile(readFileSync(api.statePath, "utf8")).statementsDir, statements);
+});
+
+test("a separate XDG_STATE_HOME leaves the real state file untouched", async () => {
+  const { home, root, statements } = tempTree();
+  const realStateDir = join(home, ".state", "omakei");
+  const realStatePath = join(realStateDir, "state.json");
+  const sandbox = join(root, "sandbox");
+  mkdirSync(sandbox, { recursive: true });
+  mkdirSync(realStateDir, { recursive: true });
+  writeFileSync(realStatePath, renderStateFile(statements));
+  const before = readFileSync(realStatePath, "utf8");
+
+  const api = createLedgerApi({
+    env: { XDG_STATE_HOME: join(root, "dev-state"), OMAKEI_STATEMENTS_DIR: sandbox },
+    home,
+  });
+
+  assert.equal((await api.stateBody()).folder.path, sandbox);
+  assert.notEqual(api.statePath, realStatePath);
+  assert.equal(readFileSync(realStatePath, "utf8"), before);
+});
+
 /* ------------------------------------------------------- disk-path hardening
  *
  * Everything below fails against a `readFile(path)` / `writeFile(path + ".tmp")`

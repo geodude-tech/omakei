@@ -95,9 +95,14 @@ anything under `src/`:
 
 ```sh
 npm install
-npm run build     # writes dist/
-npm run dev       # or work against the dev server on 127.0.0.1:8080
+npm run build         # writes dist/
+npm run dev           # or work against the dev server on 127.0.0.1:8080
+npm run dev:isolated  # dev server against a throwaway folder, not your ledger
 ```
+
+`npm run dev` reads the folder you attached — your real statements. `npm run
+dev:isolated` keeps its own state file and statements under `.dev/`, which is
+gitignored, so development never reads or rewrites the real ones.
 
 ## License
 

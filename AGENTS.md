@@ -87,13 +87,16 @@ Build inputs are listed in `scripts/build-inputs.mjs`. Tests are excluded; QML a
 - Never put personal data in tests, fixtures, comments, or default rules: no household-specific merchants, account numbers, balances, addresses, or family names. Invent neutral values; a test that needs a merchant should use a well-known national chain.
 - Statement file extensions are gitignored, so parser fixtures are **inline strings** in `parse.test.ts`, never files.
 - No default ledger path. Nothing is attached until the user picks a folder.
-- Optional dev convenience: `OMAKEI_STATEMENTS_DIR` seeds the same state an attach would write. It must be exported in the environment — `OMAKEI_STATEMENTS_DIR=/path npm run dev`. Putting it in `.env.local` does **not** work: Vite does not load `.env` files into `process.env`, and `ledger-api-plugin.mjs` never calls `loadEnv`, so the server never sees it. `.env.example` says otherwise and is wrong.
+- Optional dev convenience: `OMAKEI_STATEMENTS_DIR` **seeds** the state an attach would write — it does not override it. `currentDir()` prefers the saved `statementsDir`, so on a machine that has ever attached a folder the variable is ignored and `npm run dev` reads the real ledger. Do not "fix" this by letting the variable win: it persists through the same `persist()` every attach uses, so an overriding seed would rewrite the user's real `state.json` and point their bar pill at dev data.
+- **Develop against a sandbox, not your own ledger:** `npm run dev:isolated` sets `XDG_STATE_HOME` to `.dev/state` alongside `OMAKEI_STATEMENTS_DIR=.dev/statements`. Moving the state dir is what makes the seed apply — there is no saved folder in a fresh one to lose to — and the real `state.json` is neither read nor written. `.dev/` is gitignored. This is env-only: no dev-only code path, same handler, same disk code.
+- Both variables must be exported in the environment. Putting them in `.env.local` does **not** work: Vite does not load `.env` files into `process.env`, and `ledger-api-plugin.mjs` never calls `loadEnv`, so the server never sees them.
 
 ## Commands
 
 - `npm test` — finance and script tests, ledger-contract check, no-statements check, panel-contract check, plugin check
 - `npm run typecheck`
 - `npm run dev` — ledger editor at http://127.0.0.1:8080/ (live theme reload)
+- `npm run dev:isolated` — same, against the gitignored `.dev/` sandbox instead of your real statements
 - `npm run build` — writes `dist/`; commit the result
 - `npm run start` — serve the committed `dist/` the way installers do
 

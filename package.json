@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
+    "dev:isolated": "mkdir -p .dev/statements && XDG_STATE_HOME=\"$PWD/.dev/state\" OMAKEI_STATEMENTS_DIR=\"$PWD/.dev/statements\" vite dev",
     "build": "vite build && node scripts/stamp-build.mjs",
     "start": "node scripts/omakei-serve.mjs",
     "typecheck": "tsc --noEmit",

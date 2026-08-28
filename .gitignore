@@ -9,6 +9,10 @@ artifacts
 .DS_Store
 *.local
 
+# Isolated dev sandbox: `npm run dev:isolated` keeps its own state file and
+# statements here, so developing never reads or rewrites the real ones.
+.dev/
+
 # Personal financial data — never commit real statements.
 # folio-ledger.json is the name an early build used; still blocked so an old
 # one cannot slip in.
