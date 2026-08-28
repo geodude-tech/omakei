@@ -16,6 +16,20 @@ Both the Vite dev server and `omakei-serve.mjs` mount that same handler, so deve
 
 Because the server knows the folder's real path, it records it in `~/.local/state/omakei/state.json`, and `Panel.qml` reads the ledger from there. That file's shape is part of the plugin contract. Nobody should have to type a ledger path into widget settings; the `ledgerPath` setting exists only to override the recorded one.
 
+## Reading the ledger
+
+`docs/ledger.md` is the contract for querying the ledger from outside the app —
+the other half of the loop the panels finish. It states where the ledger lives and
+the five rules that make a total correct, the first of which is that
+`categoryId === "transfers"` is neither spend nor income. Skipping that one
+overstates spending by most of a credit-card payment while leaving net looking
+plausible, so the doc exists to be read before the first query, not after a wrong
+answer.
+
+`src/lib/finance/ledger-contract.test.ts` parses the doc and compares it to the
+code, so a renamed category fails `npm test` rather than misleading an agent.
+Keep the doc true; do not duplicate its category table anywhere.
+
 ## Panels
 
 Each card on the dashboard is a panel in `src/panels/`, discovered by a glob in
@@ -44,6 +58,8 @@ Rebuild and commit `dist/` whenever a build input changes. `npm run build` stamp
 git config core.hooksPath .githooks
 ```
 
+The stamp hashes the files git is **tracking**, so `git add` a brand-new file before building — a build run while it is still untracked stamps a hash that omits it, and the hook then rejects the commit.
+
 Build inputs are listed in `scripts/build-inputs.mjs`. Tests are excluded; QML and the server scripts ship as source, except `page-shell.mjs`, whose class names Tailwind scans. Dependency bumps are not tracked, so rebuild by hand after changing `package.json`.
 
 ## Product
@@ -68,7 +84,7 @@ Build inputs are listed in `scripts/build-inputs.mjs`. Tests are excluded; QML a
 
 ## Commands
 
-- `npm test` — finance and script tests, no-statements check, panel-contract check, plugin check
+- `npm test` — finance and script tests, ledger-contract check, no-statements check, panel-contract check, plugin check
 - `npm run typecheck`
 - `npm run dev` — ledger editor at http://127.0.0.1:8080/ (live theme reload)
 - `npm run build` — writes `dist/`; commit the result

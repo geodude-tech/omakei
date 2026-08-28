@@ -45,6 +45,14 @@ export function monthKey(dateIso: string): string {
   return dateIso.slice(0, 7);
 }
 
+/** Today as "YYYY-MM-DD", in the user's own timezone rather than UTC. */
+export function todayIso(): string {
+  const now = new Date();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${mm}-${dd}`;
+}
+
 export function formatMonthLabel(key: string): string {
   const [y, m] = key.split("-").map(Number);
   if (!y || !m) return key;

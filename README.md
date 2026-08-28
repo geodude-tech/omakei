@@ -62,6 +62,8 @@ Every statement you drop in the folder ends up in `omakei-ledger.json` next to t
 
 That is the whole idea. The dashboard shows the answers you got tired of asking for.
 
+Before the first question, give the agent [`docs/ledger.md`](docs/ledger.md). It says where the file is and the handful of rules that make a total come out right — chief among them that transfers between your own accounts are not spending. Skip it and a credit-card payment gets counted as money spent, which quietly inflates every figure that matters.
+
 ### Pinning an answer
 
 Each card on the dashboard is one file in `src/panels/`. If an answer is worth seeing every day, an agent can write a panel for it: a small component that reads the ledger and renders a number, a chart, or a single sentence. A panel that has nothing to say renders nothing, so a card only appears in the months it matters.
