@@ -1,9 +1,8 @@
 import { defineConfig } from "vite";
-import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 // @ts-expect-error JS plugin alongside the TS vite config
-import { localStatementsPlugin } from "./scripts/local-statements-plugin.mjs";
+import { ledgerApiPlugin } from "./scripts/ledger-api-plugin.mjs";
 // @ts-expect-error JS plugin alongside the TS vite config
 import { omakeiHtmlPlugin } from "./scripts/omakei-html-plugin.mjs";
 
@@ -14,9 +13,8 @@ export default defineConfig({
   resolve: { tsconfigPaths: true },
   build: { outDir: "dist", emptyOutDir: true },
   plugins: [
-    localStatementsPlugin(),
+    ledgerApiPlugin(),
     omakeiHtmlPlugin(),
-    tanstackRouter({ target: "react", autoCodeSplitting: false }),
     tailwindcss(),
     viteReact(),
   ],

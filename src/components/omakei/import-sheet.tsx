@@ -1,5 +1,12 @@
+/**
+ * One-off imports.
+ *
+ * The attached folder is the normal way statements get in — the server syncs
+ * it on every open. This is for the exceptions: a file that lives somewhere
+ * else, or a table pasted out of a bank's web page.
+ */
 import { useRef, useState } from "react";
-import { Folder, Upload } from "lucide-react";
+import { Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,16 +26,9 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import {
-  canPickDirectory,
-  collectDrop,
-  markFolderLoadedThisSession,
-  parseLocalStatement,
-  parseStatementFiles,
-  pickStatementsDirectory,
-} from "@/lib/finance/folder";
-import { importAndSave, syncAttachedFolder, toastFolderSync } from "@/lib/finance/folder-sync";
 import { parseStatementFile } from "@/lib/finance/parse";
+import { parseDroppedFiles } from "@/lib/finance/statements";
+import { importAndSave } from "@/lib/finance/sync";
 import {
   ACCOUNT_KIND_LABEL,
   type AccountKind,
@@ -50,59 +50,18 @@ export function ImportSheet({
   const [dragOver, setDragOver] = useState(false);
   const [paste, setPaste] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
 
-  async function ingestParsed(next: ImportFileResult[], rememberedFolder?: string | null) {
-    if (next.length === 0) {
-      toast.message("No statement files in that drop");
-      return;
-    }
-    setPreviews((prev) => mergePreviews(prev, next));
-    if (rememberedFolder) {
-      markFolderLoadedThisSession();
-      toast.success(`Staged ${next.length} file${next.length === 1 ? "" : "s"} from ${rememberedFolder}`);
-    }
-  }
-
-  async function ingestFiles(fileList: FileList | File[]) {
-    await ingestParsed(await parseStatementFiles(Array.from(fileList)));
-  }
-
-  async function onDrop(e: React.DragEvent) {
-    e.preventDefault();
-    setDragOver(false);
+  async function stage(files: File[]) {
     setBusy(true);
     try {
-      const { files, folder } = await collectDrop(e.dataTransfer);
-      if (folder) {
-        const result = await syncAttachedFolder(folder.handle, folder.name);
-        toastFolderSync(result);
-        onOpenChange(false);
+      const parsed = await parseDroppedFiles(files);
+      if (parsed.length === 0) {
+        toast.message("No OFX, QFX, or CSV statements in that drop");
         return;
       }
-      await ingestParsed(files);
+      setPreviews((prev) => mergePreviews(prev, parsed));
     } catch {
-      toast.error("Could not read that folder");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function chooseFolder() {
-    setBusy(true);
-    try {
-      if (canPickDirectory()) {
-        const folder = await pickStatementsDirectory();
-        if (!folder) return;
-        const result = await syncAttachedFolder(folder.handle, folder.name);
-        toastFolderSync(result);
-        onOpenChange(false);
-        return;
-      }
-      folderInputRef.current?.click();
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      toast.error("Could not open that folder");
+      toast.error("Could not read those files");
     } finally {
       setBusy(false);
     }
@@ -110,17 +69,15 @@ export function ImportSheet({
 
   function addPasted() {
     if (!paste.trim()) return;
-    const parsed = parseStatementFile("pasted.csv", paste);
-    setPreviews((prev) => mergePreviews(prev, [parsed]));
+    setPreviews((prev) => mergePreviews(prev, [parseStatementFile("pasted.csv", paste)]));
     setPaste("");
   }
 
   async function commit() {
     if (previews.length === 0) return;
-    const files = previews;
     setBusy(true);
     try {
-      const summary = await importAndSave(files);
+      const summary = await importAndSave(previews);
       setPreviews([]);
       onOpenChange(false);
       toast.success(
@@ -134,52 +91,6 @@ export function ImportSheet({
     }
   }
 
-  async function loadFromThisComputer() {
-    setBusy(true);
-    try {
-      const listRes = await fetch("/__folio/local-statements");
-      if (!listRes.ok) {
-        toast.error("Local statements are only available on localhost in dev");
-        return;
-      }
-      const list = (await listRes.json()) as {
-        configured?: boolean;
-        files?: Array<{ path: string; name: string }>;
-        error?: string;
-      };
-      if (!list.configured) {
-        toast.error("Set FOLIO_STATEMENTS_DIR in .env.local");
-        return;
-      }
-      const files = list.files ?? [];
-      if (files.length === 0) {
-        toast.message("No statement files in the local folder");
-        return;
-      }
-      const loaded = await Promise.all(
-        files.map(async (file) => {
-          const fileRes = await fetch(
-            `/__folio/local-statements/file?path=${encodeURIComponent(file.path)}`,
-          );
-          if (!fileRes.ok) return null;
-          const payload = (await fileRes.json()) as { path: string; text: string };
-          return parseLocalStatement(payload.path, payload.text);
-        }),
-      );
-      const next = loaded.filter((row): row is ImportFileResult => row !== null);
-      if (next.length === 0) {
-        toast.error("Could not read local statement files");
-        return;
-      }
-      setPreviews((prev) => mergePreviews(prev, next));
-      toast.success(`Staged ${next.length} file${next.length === 1 ? "" : "s"} from this computer`);
-    } catch {
-      toast.error("Could not load local statements");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const totalRows = previews.reduce((n, p) => n + p.rows.length, 0);
 
   return (
@@ -187,7 +98,11 @@ export function ImportSheet({
       <SheetContent
         side="right"
         className="w-full sm:max-w-lg"
-        onDrop={onDrop}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          void stage(Array.from(e.dataTransfer.files));
+        }}
         onDragOver={(e) => {
           e.preventDefault();
           setDragOver(true);
@@ -195,9 +110,10 @@ export function ImportSheet({
         onDragLeave={() => setDragOver(false)}
       >
         <SheetHeader>
-          <SheetTitle>Import statements</SheetTitle>
+          <SheetTitle>Import a one-off file</SheetTitle>
           <SheetDescription>
-            Choose a folder and Omakei syncs it — OFX, QFX, or CSV. Duplicates are skipped.
+            Statements in your attached folder sync on their own. Use this for anything that
+            lives somewhere else. Duplicates are skipped either way.
           </SheetDescription>
         </SheetHeader>
 
@@ -212,58 +128,21 @@ export function ImportSheet({
               )}
             >
               <Upload className="size-5 text-primary" />
-              <span className="text-sm font-medium">Drop a folder or files</span>
-              <span className="text-xs text-muted-foreground">
-                Nested checking, card, and mortgage exports are fine
-              </span>
+              <span className="text-sm font-medium">Drop files, or click to choose</span>
+              <span className="text-xs text-muted-foreground">OFX, QFX, OFC, CSV, or TSV</span>
             </button>
             <input
               ref={inputRef}
               type="file"
-              accept=".csv,.tsv,.ofx,.qfx,.txt,text/csv"
+              accept=".csv,.tsv,.ofx,.qfx,.ofc,.txt,text/csv"
               multiple
               className="hidden"
-              onChange={(e) => {
-                if (e.target.files) void ingestFiles(e.target.files);
-                e.target.value = "";
-              }}
-            />
-            <input
-              ref={folderInputRef}
-              type="file"
-              className="hidden"
-              multiple
-              {...{ webkitdirectory: "" }}
               onChange={(e) => {
                 const list = e.target.files;
                 e.target.value = "";
-                if (!list) return;
-                void (async () => {
-                  setBusy(true);
-                  try {
-                    const parsed = await parseStatementFiles(Array.from(list));
-                    const summary = await importAndSave(parsed);
-                    toast.success(
-                      `${summary.added} added · ${summary.skipped} duplicate${summary.skipped === 1 ? "" : "s"} skipped`,
-                    );
-                    onOpenChange(false);
-                  } catch {
-                    toast.error("Could not read that folder");
-                  } finally {
-                    setBusy(false);
-                  }
-                })();
+                if (list) void stage(Array.from(list));
               }}
             />
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => inputRef.current?.click()} disabled={busy}>
-                Choose files
-              </Button>
-              <Button type="button" variant="secondary" size="sm" onClick={() => void chooseFolder()} disabled={busy}>
-                <Folder className="size-4" />
-                Choose folder
-              </Button>
-            </div>
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="paste">Or paste a CSV</Label>
@@ -286,17 +165,6 @@ export function ImportSheet({
                 Parse pasted text
               </Button>
             </div>
-
-            {import.meta.env.DEV && (
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => void loadFromThisComputer()}
-                disabled={busy}
-              >
-                Load from this computer
-              </Button>
-            )}
 
             {previews.map((file, idx) => (
               <div key={`${file.filename}-${idx}`} className="rounded-lg bg-muted/50 p-3">
@@ -377,13 +245,13 @@ export function ImportSheet({
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground">
               {busy
-                ? "Syncing"
+                ? "Reading"
                 : totalRows
                   ? `${totalRows} rows ready · duplicates skipped`
                   : "Nothing staged yet"}
             </p>
             <Button onClick={() => void commit()} disabled={busy || totalRows === 0}>
-              {busy ? "Syncing" : "Sync"}
+              {busy ? "Importing" : "Import"}
             </Button>
           </div>
         </div>

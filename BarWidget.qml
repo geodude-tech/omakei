@@ -7,7 +7,6 @@ BarWidget {
   id: root
   moduleName: "omakei"
 
-  readonly property string appUrl: setting("appUrl", "http://127.0.0.1:8080/")
   readonly property string currentMonth: Model.currentMonth()
   readonly property var monthSummary: panelLoader.item ? panelLoader.item.currentSummary : Model.emptySummary(currentMonth)
   readonly property string displayText: Model.barLabel(monthSummary)
@@ -30,11 +29,12 @@ BarWidget {
     if (panelLoader.item && panelLoader.item.toggle) panelLoader.item.toggle()
   }
 
+  /**
+   * Delegate to the panel: only it knows the plugin directory, and the opener
+   * there starts the editor when nothing is serving yet.
+   */
   function openOmakei() {
-    var summary = panelLoader.item ? panelLoader.item.monthSummary : root.monthSummary
-    var cmd = Model.openEditorCommand(root.appUrl, summary)
-    if (!cmd) return
-    if (root.bar) root.bar.run(cmd)
+    if (panelLoader.item && panelLoader.item.openOmakei) panelLoader.item.openOmakei()
   }
 
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false

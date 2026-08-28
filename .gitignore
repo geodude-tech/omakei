@@ -9,9 +9,11 @@ artifacts
 .DS_Store
 *.local
 
-# Personal financial data — never commit real statements
-folio-ledger.json
+# Personal financial data — never commit real statements.
+# folio-ledger.json is the name an early build used; still blocked so an old
+# one cannot slip in.
 omakei-ledger.json
+folio-ledger.json
 *.csv
 *.tsv
 *.ofx

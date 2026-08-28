@@ -7,10 +7,10 @@ import { fileURLToPath } from "node:url";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = readFileSync(join(ROOT, "Model.js"), "utf8");
 const Model = new Function(
-  `${src}\nreturn { editorUrl, editorQuery, emptySummary, summarize, parseSetAsides, openEditorCommand, shellQuote };`,
+  `${src}\nreturn { editorUrl, editorQuery, emptySummary, summarize, parseSetAsides, openEditorCommand, shellQuote, stateFilePath, ledgerPathFromState };`,
 )();
 
-test("editorUrl copies month cell values onto the Omakei URL", () => {
+test("editorUrl carries the month the popup was showing", () => {
   const summary = {
     hasData: true,
     month: "2026-08",
@@ -21,25 +21,17 @@ test("editorUrl copies month cell values onto the Omakei URL", () => {
     allocated: 500,
     setAsides: [{ id: "tax", name: "Filing taxes", amount: 500 }],
   };
-  assert.equal(
-    Model.editorQuery(summary),
-    "m=2026-08&sp=4312.55&inc=8200&n=3387.45&u=17&r=500&sa=tax%09Filing%20taxes%09500",
-  );
+  assert.equal(Model.editorQuery(summary), "m=2026-08");
   assert.equal(
     Model.editorUrl("http://127.0.0.1:8080/", summary),
-    "http://127.0.0.1:8080/?m=2026-08&sp=4312.55&inc=8200&n=3387.45&u=17&r=500&sa=tax%09Filing%20taxes%09500",
+    "http://127.0.0.1:8080/?m=2026-08",
   );
-  assert.equal(
-    Model.editorUrl("http://127.0.0.1:8080/", Model.emptySummary("2026-08")),
-    "http://127.0.0.1:8080/",
-  );
-  assert.equal(
-    Model.openEditorCommand("http://127.0.0.1:8080/", summary),
-    "omarchy launch browser 'http://127.0.0.1:8080/?m=2026-08&sp=4312.55&inc=8200&n=3387.45&u=17&r=500&sa=tax%09Filing%20taxes%09500'",
-  );
+  // An empty month still opens the editor, just without pinning a month.
+  assert.equal(Model.editorQuery({ month: "" }), "");
+  assert.equal(Model.editorUrl("http://127.0.0.1:8080/", { month: "" }), "http://127.0.0.1:8080/");
 });
 
-test("openEditorCommand uses the plugin's opener when it knows where it lives", () => {
+test("openEditorCommand routes through the plugin's own opener", () => {
   const summary = {
     hasData: true,
     month: "2026-08",
@@ -68,14 +60,17 @@ test("openEditorCommand uses the plugin's opener when it knows where it lives", 
   assert.equal(
     Model.openEditorCommand(
       "http://127.0.0.1:8080/",
-      Model.emptySummary("2026-08"),
+      { month: "" },
       "/plugins/omakei",
     ),
     "'/plugins/omakei/scripts/omakei-open' 'http://127.0.0.1:8080/'",
   );
+  // Without a plugin directory there is nothing that can start the editor.
+  assert.equal(Model.openEditorCommand("http://127.0.0.1:8080/", summary), "");
+  assert.equal(Model.openEditorCommand("", summary, "/plugins/omakei"), "");
 });
 
-test("summarize feeds editorQuery from a month of transactions", () => {
+test("summarize totals a month of transactions", () => {
   const summary = Model.summarize(
     [
       { date: "2026-08-02", amount: -12.5, description: "Coffee", categoryId: "coffee" },
@@ -86,6 +81,38 @@ test("summarize feeds editorQuery from a month of transactions", () => {
     "2026-08",
     [{ id: "tax", name: "Taxes", amount: 100 }],
   );
-  const query = Model.editorQuery(summary);
-  assert.match(query, /^m=2026-08&sp=52\.5&inc=3000&n=2847\.5&u=1&r=100&sa=tax%09Taxes%09100$/);
+  assert.equal(summary.spent, 52.5);
+  assert.equal(summary.income, 3000);
+  assert.equal(summary.net, 2847.5);
+  assert.equal(summary.uncategorized, 1);
+  assert.equal(summary.allocated, 100);
+  assert.equal(Model.editorQuery(summary), "m=2026-08");
+});
+
+test("the widget finds the ledger from the server's state file", () => {
+  assert.equal(
+    Model.stateFilePath("/run/state", "/home/user"),
+    "/run/state/omakei/state.json",
+  );
+  assert.equal(
+    Model.stateFilePath("", "/home/user"),
+    "/home/user/.local/state/omakei/state.json",
+  );
+
+  assert.equal(
+    Model.ledgerPathFromState(
+      JSON.stringify({ version: 1, statementsDir: "/s", ledgerPath: "/s/omakei-ledger.json" }),
+    ),
+    "/s/omakei-ledger.json",
+  );
+  // Derived from the folder when only the folder is recorded.
+  assert.equal(
+    Model.ledgerPathFromState(JSON.stringify({ version: 1, statementsDir: "/s/" })),
+    "/s/omakei-ledger.json",
+  );
+  // No folder attached, unknown version, or unreadable file: no path.
+  assert.equal(Model.ledgerPathFromState(JSON.stringify({ version: 1, statementsDir: "" })), "");
+  assert.equal(Model.ledgerPathFromState(JSON.stringify({ version: 2, ledgerPath: "/x" })), "");
+  assert.equal(Model.ledgerPathFromState("not json"), "");
+  assert.equal(Model.ledgerPathFromState(""), "");
 });

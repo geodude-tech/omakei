@@ -1,4 +1,4 @@
-import type { SetAside } from "./types";
+import type { SetAside } from "./types.ts";
 
 export function makeSetAside(name = "", amount = 0): SetAside {
   return {

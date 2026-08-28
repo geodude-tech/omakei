@@ -6,7 +6,9 @@
   "author": "Andrew Scholz",
   "license": "MIT",
   "description": "This month's leftover on the Omarchy bar. Attach a folder of statements on this machine. Nothing is uploaded.",
-  "kinds": ["bar-widget"],
+  "kinds": [
+    "bar-widget"
+  ],
   "entryPoints": {
     "barWidget": "BarWidget.qml"
   },
@@ -20,8 +22,18 @@
       "appUrl": "http://127.0.0.1:8080/"
     },
     "schema": [
-      { "key": "ledgerPath", "type": "string", "label": "Ledger file", "defaultValue": "", "description": "Path to the omakei-ledger.json in the folder you attached in Omakei. Set this yourself; Omakei does not write it for you." },
-      { "key": "appUrl", "type": "string", "label": "Omakei URL" }
+      {
+        "key": "ledgerPath",
+        "type": "string",
+        "label": "Ledger file",
+        "defaultValue": "",
+        "description": "Optional. Omakei records the folder you attach in the editor and the widget reads the ledger from there. Set this only to point at a ledger somewhere else."
+      },
+      {
+        "key": "appUrl",
+        "type": "string",
+        "label": "Omakei URL"
+      }
     ]
   }
 }

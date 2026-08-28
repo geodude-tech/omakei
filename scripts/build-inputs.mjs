@@ -9,8 +9,17 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
-/** Compiled into the bundle. QML and the server scripts run as source, so they are not here. */
-export const BUILD_INPUT_PATHS = ["src", "index.html", "vite.config.ts", "scripts/widget-boot-script.mjs"];
+/**
+ * What the build reads. QML and the server scripts run as source, so they are
+ * not here — except `page-shell.mjs`, whose class names Tailwind scans (see
+ * the `@source` lines in `src/styles.css`), so editing it changes the CSS.
+ */
+export const BUILD_INPUT_PATHS = [
+  "src",
+  "index.html",
+  "vite.config.ts",
+  "scripts/page-shell.mjs",
+];
 
 export const STAMP_PATH = "dist/.build-hash";
 

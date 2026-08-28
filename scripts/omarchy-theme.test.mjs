@@ -88,10 +88,10 @@ test("renderOmarchyThemeCss is empty-safe and emits :root when mapped", () => {
 });
 
 test("loadOmarchyTheme falls back when the theme dir is missing or disabled", () => {
-  assert.equal(loadOmarchyTheme({ FOLIO_DISABLE_OMARCHY_THEME: "1" }), null);
-  assert.equal(loadOmarchyTheme({ OMARCHY_THEME_DIR: "/tmp/folio-no-such-theme" }), null);
+  assert.equal(loadOmarchyTheme({ OMAKEI_DISABLE_OMARCHY_THEME: "1" }), null);
+  assert.equal(loadOmarchyTheme({ OMARCHY_THEME_DIR: "/tmp/omakei-no-such-theme" }), null);
 
-  const dir = mkdtempSync(join(tmpdir(), "folio-omarchy-"));
+  const dir = mkdtempSync(join(tmpdir(), "omakei-omarchy-"));
   writeFileSync(join(dir, "colors.toml"), RETRO_82);
   const theme = loadOmarchyTheme({ OMARCHY_THEME_DIR: dir });
   assert.ok(theme?.enabled);

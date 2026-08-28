@@ -6,21 +6,21 @@
     <title>Omakei</title>
     <meta
       name="description"
-      content="Import bank, credit card, and mortgage statements into one clean ledger with a crisp monthly spend overview."
+      content="Every bank, card, and mortgage statement in one local ledger, with this month's spend at a glance."
     />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!--omakei:head-->
   </head>
   <body>
     <style>
-      @keyframes folio-spin {
+      @keyframes omakei-spin {
         to {
           transform: rotate(360deg);
         }
       }
     </style>
     <div
-      id="folio-boot"
+      id="omakei-boot"
       style="
         position: fixed;
         inset: 0;
@@ -39,11 +39,11 @@
           border: 2px solid color-mix(in srgb, var(--color-foreground, #fff) 20%, transparent);
           border-top-color: var(--color-foreground, #fff);
           border-radius: 50%;
-          animation: folio-spin 0.7s linear infinite;
+          animation: omakei-spin 0.7s linear infinite;
         "
       ></div>
     </div>
-    <!--omakei:boot-->
+    <!--omakei:state-->
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

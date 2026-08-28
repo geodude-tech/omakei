@@ -66,3 +66,12 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/*
+ * A panel that has nothing to say returns null, leaving `.panel-body` empty.
+ * Hiding the whole card here — rather than in React — means the panel stays a
+ * plain component that either renders or does not.
+ */
+.panel-card:has(.panel-body:empty) {
+  display: none;
+}

@@ -1,4 +1,4 @@
-import type { Category, CategorizeRule } from "./types";
+import type { Category, CategorizeRule } from "./types.ts";
 
 export const CATEGORIES: Category[] = [
   { id: "housing", name: "Housing", group: "living" },

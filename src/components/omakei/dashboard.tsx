@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -10,10 +10,10 @@ import {
   Upload,
 } from "lucide-react";
 import { toast } from "sonner";
-import { CategorySelect } from "@/components/folio/category-select";
-import { ImportSheet } from "@/components/folio/import-sheet";
-import { RulesSheet } from "@/components/folio/rules-sheet";
-import { AddSetAsideCell, SetAsideStat } from "@/components/folio/set-aside-stat";
+import { CategorySelect } from "@/components/omakei/category-select";
+import { ImportSheet } from "@/components/omakei/import-sheet";
+import { RulesSheet } from "@/components/omakei/rules-sheet";
+import { AddSetAsideCell, SetAsideStat } from "@/components/omakei/set-aside-stat";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,29 +35,25 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CATEGORY_BY_ID, categoryName } from "@/lib/finance/categories";
+import { categoryName } from "@/lib/finance/categories";
 import { exportLedgerCsv, isIncome, isSpend } from "@/lib/finance/ledger";
+import { categoryTotals } from "@/lib/finance/summaries.ts";
+import { PanelGrid } from "@/lib/panels/panel-grid.tsx";
 import { isTransferTx } from "@/lib/finance/transfers";
-import {
-  canPickDirectory,
-  forgetRememberedFolder,
-  getRememberedFolder,
-  pickStatementsDirectory,
-} from "@/lib/finance/folder";
 import { bootLedger } from "@/lib/finance/boot";
+import { saveLedgerNow, setLedgerWritable } from "@/lib/finance/ledger-file";
 import {
-  flushLedgerSave,
-  setActiveLedgerFolder,
-} from "@/lib/finance/ledger-file";
-import { syncAttachedFolder, toastFolderSync } from "@/lib/finance/folder-sync";
+  attachFolder,
+  detachFolder,
+  writeLedger,
+  type AttachedFolder,
+} from "@/lib/finance/server";
+import { syncAttachedFolder, toastSync } from "@/lib/finance/sync";
+import { clearOpeningMonthFromUrl } from "@/lib/finance/opening-month";
 import { availableNet, setAsideTotal } from "@/lib/finance/set-asides";
 import { unknownMerchants, useLedgerStore } from "@/lib/finance/store";
 import type { SetAside, Transaction } from "@/lib/finance/types";
-import {
-  clearWidgetPreviewFromUrl,
-  readWidgetPreviewFromLocation,
-  type WidgetPreview,
-} from "@/lib/finance/widget-preview";
+import { FolderPicker } from "@/components/omakei/folder-picker";
 import {
   cn,
   downloadTextFile,
@@ -68,20 +64,8 @@ import {
   shiftMonth,
 } from "@/lib/utils";
 
-const DailySpendChart = lazy(() => import("@/components/folio/daily-spend-chart"));
-
 const MERCHANT_PAGE_SIZE = 12;
 const TX_PAGE_SIZE = 40;
-
-const CHART_COLORS = [
-  "var(--color-chart-1)",
-  "var(--color-chart-2)",
-  "var(--color-chart-3)",
-  "var(--color-chart-4)",
-  "var(--color-chart-5)",
-  "var(--color-chart-6)",
-  "var(--color-chart-7)",
-];
 
 export function Dashboard() {
   const transactions = useLedgerStore((s) => s.transactions);
@@ -101,25 +85,22 @@ export function Dashboard() {
   const [focusSetAsideId, setFocusSetAsideId] = useState<string | null>(null);
   const [merchantPage, setMerchantPage] = useState(0);
   const [txPage, setTxPage] = useState(0);
-  const [preview, setPreview] = useState<WidgetPreview | null>(null);
   const [detailsReady, setDetailsReady] = useState(false);
-  const [folderName, setFolderName] = useState<string | null>(null);
-  const [folderNeedsPermission, setFolderNeedsPermission] = useState(false);
+  const [folder, setFolder] = useState<AttachedFolder | null>(null);
+  const [home, setHome] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const ready = initialized || preview !== null;
 
   useLayoutEffect(() => {
-    setPreview(readWidgetPreviewFromLocation());
-  }, []);
-
-  useLayoutEffect(() => {
-    if (!ready) return;
-    document.getElementById("folio-boot")?.remove();
-  }, [ready]);
+    if (!initialized) return;
+    document.getElementById("omakei-boot")?.remove();
+  }, [initialized]);
 
   useEffect(() => {
     if (!initialized) return;
-    clearWidgetPreviewFromUrl();
+    clearOpeningMonthFromUrl();
+    // Charts and the long activity table wait a frame so the numbers above
+    // them are on screen first.
     const id = requestAnimationFrame(() => {
       requestAnimationFrame(() => setDetailsReady(true));
     });
@@ -130,8 +111,8 @@ export function Dashboard() {
     let cancelled = false;
     void bootLedger().then((result) => {
       if (cancelled) return;
-      if (result.folderName) setFolderName(result.folderName);
-      setFolderNeedsPermission(result.folderNeedsPermission);
+      setFolder(result.folder);
+      setHome(result.home);
     });
     return () => {
       cancelled = true;
@@ -139,18 +120,16 @@ export function Dashboard() {
   }, []);
 
   useEffect(() => {
-    function persistNow() {
-      if (document.visibilityState === "hidden") {
-        void flushLedgerSave(useLedgerStore.getState());
-      }
-    }
     function persistOnHide() {
-      void flushLedgerSave(useLedgerStore.getState());
+      void saveLedgerNow(useLedgerStore.getState());
     }
-    document.addEventListener("visibilitychange", persistNow);
+    function persistIfHidden() {
+      if (document.visibilityState === "hidden") persistOnHide();
+    }
+    document.addEventListener("visibilitychange", persistIfHidden);
     window.addEventListener("pagehide", persistOnHide);
     return () => {
-      document.removeEventListener("visibilitychange", persistNow);
+      document.removeEventListener("visibilitychange", persistIfHidden);
       window.removeEventListener("pagehide", persistOnHide);
     };
   }, []);
@@ -165,11 +144,8 @@ export function Dashboard() {
     [transactions, selectedMonth],
   );
 
-  const liveStats = useMemo(() => summarize(monthTx, setAsides), [monthTx, setAsides]);
-  const stats = initialized || !preview ? liveStats : previewStats(preview);
-  const displaySetAsides = initialized || !preview ? setAsides : preview.setAsides;
+  const stats = useMemo(() => summarize(monthTx, setAsides), [monthTx, setAsides]);
   const cats = useMemo(() => categoryTotals(monthTx), [monthTx]);
-  const daily = useMemo(() => dailySpend(selectedMonth, monthTx), [selectedMonth, monthTx]);
   const unknowns = useMemo(
     () => (detailsReady ? unknownMerchants(transactions) : []),
     [detailsReady, transactions],
@@ -233,33 +209,48 @@ export function Dashboard() {
     toast.success("Downloaded one clean ledger file");
   }
 
-  async function syncFromDisk() {
+  /** Re-read the attached folder, or ask for one if none is attached yet. */
+  async function resync() {
     if (syncing) return;
+    if (!folder) {
+      setPickerOpen(true);
+      return;
+    }
     setSyncing(true);
     try {
-      let rec = await getRememberedFolder();
-      if (!rec) {
-        if (!canPickDirectory()) {
-          setImportOpen(true);
-          toast.message("Drop or choose your statements folder once");
-          return;
-        }
-        rec = await pickStatementsDirectory();
-        if (!rec) return;
-        setFolderName(rec.name);
-      }
-      const result = await syncAttachedFolder(rec.handle, rec.name);
-      setFolderNeedsPermission(false);
-      toastFolderSync(result);
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      toast.error("Could not sync the folder");
+      toastSync(await syncAttachedFolder(folder.name));
+    } catch {
+      toast.error("Could not read the attached folder");
     } finally {
       setSyncing(false);
     }
   }
 
-  if (!ready) {
+  async function attach(path: string) {
+    try {
+      const state = await attachFolder(path);
+      if (!state.folder) {
+        toast.error("Could not attach that folder");
+        return;
+      }
+      setFolder(state.folder);
+      setLedgerWritable(true, writeLedger);
+      if (state.ledger) useLedgerStore.getState().loadSnapshot(state.ledger);
+      setPickerOpen(false);
+      toastSync(await syncAttachedFolder(state.folder.name));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not attach that folder");
+    }
+  }
+
+  async function detach() {
+    await detachFolder().catch(() => null);
+    setLedgerWritable(false);
+    setFolder(null);
+    toast.message("Detached the folder. Your files are untouched.");
+  }
+
+  if (!initialized) {
     return (
       <div className="flex min-h-dvh items-center justify-center bg-background">
         <div
@@ -277,34 +268,34 @@ export function Dashboard() {
           <div className="min-w-0 flex-1">
             <p className="font-display text-xl font-medium tracking-tight italic sm:text-2xl">Omakei</p>
             <p className="hidden text-xs text-muted-foreground sm:block">
-              {folderName ? `Saved in ${folderName}/omakei-ledger.json` : "Every statement, one ledger"}
+              {folder ? `Saved in ${folder.name}/omakei-ledger.json` : "Every statement, one ledger"}
             </p>
           </div>
           <div className="flex items-center gap-1 rounded-lg bg-card px-1 shadow-[var(--shadow-border)]">
-            <Button variant="ghost" size="icon-sm" aria-label="Previous month" disabled={!initialized || !canPrev} onClick={() => setMonth(prevMonth)}>
+            <Button variant="ghost" size="icon-sm" aria-label="Previous month" disabled={!canPrev} onClick={() => setMonth(prevMonth)}>
               <ChevronLeft />
             </Button>
             <p className="min-w-32 text-center font-display text-sm font-medium sm:min-w-40 sm:text-base">
               {formatMonthLabel(selectedMonth)}
             </p>
-            <Button variant="ghost" size="icon-sm" aria-label="Next month" disabled={!initialized || !canNext} onClick={() => setMonth(nextMonth)}>
+            <Button variant="ghost" size="icon-sm" aria-label="Next month" disabled={!canNext} onClick={() => setMonth(nextMonth)}>
               <ChevronRight />
             </Button>
           </div>
           <Button
-            onClick={() => void syncFromDisk()}
-            disabled={syncing || !initialized}
+            onClick={() => void resync()}
+            disabled={syncing}
             className="hidden sm:inline-flex"
           >
             <RefreshCw className={cn(syncing && "animate-spin")} />
-            {syncing ? "Syncing" : "Sync"}
+            {syncing ? "Syncing" : folder ? "Sync" : "Attach folder"}
           </Button>
           <Button
             size="icon"
             className="sm:hidden"
             aria-label={syncing ? "Syncing statements" : "Sync statements"}
-            disabled={syncing || !initialized}
-            onClick={() => void syncFromDisk()}
+            disabled={syncing}
+            onClick={() => void resync()}
           >
             <RefreshCw className={cn(syncing && "animate-spin")} />
           </Button>
@@ -331,17 +322,12 @@ export function Dashboard() {
                 <Download className="size-4" /> Download clean file
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setRulesOpen(true)}>Auto-categorize rules</DropdownMenuItem>
-              {folderName ? (
-                <DropdownMenuItem
-                  onClick={() => {
-                    void forgetRememberedFolder();
-                    setActiveLedgerFolder(null, false);
-                    setFolderName(null);
-                    setFolderNeedsPermission(false);
-                    toast.message("Forgot the saved folder");
-                  }}
-                >
-                  Forget folder {folderName}
+              <DropdownMenuItem onClick={() => setPickerOpen(true)}>
+                {folder ? "Change folder" : "Attach a folder"}
+              </DropdownMenuItem>
+              {folder ? (
+                <DropdownMenuItem onClick={() => void detach()}>
+                  Detach {folder.name}
                 </DropdownMenuItem>
               ) : null}
               <DropdownMenuSeparator />
@@ -352,19 +338,21 @@ export function Dashboard() {
       </header>
 
       <main className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 pb-16 sm:px-6 sm:py-8">
-        {initialized && transactions.length === 0 ? (
+        {transactions.length === 0 ? (
           <button
             type="button"
-            onClick={() => void syncFromDisk()}
+            onClick={() => void resync()}
             disabled={syncing}
             className="flex flex-col items-center gap-3 rounded-xl bg-card px-6 py-14 text-center shadow-[var(--shadow-border)] transition-colors hover:bg-muted/40"
           >
             <Upload className="size-6 text-primary" />
             <span className="font-display text-xl font-medium tracking-tight">
-              {syncing ? "Syncing…" : "Choose a folder of statements"}
+              {syncing ? "Syncing…" : folder ? "No transactions yet" : "Choose a folder of statements"}
             </span>
             <span className="max-w-md text-sm text-muted-foreground">
-              OFX, QFX, or CSV from your bank. Omakei writes the ledger into that folder and the bar picks it up.
+              {folder
+                ? `Drop OFX, QFX, or CSV exports into ${folder.name} and sync again.`
+                : "OFX, QFX, or CSV from your bank. Omakei writes the ledger into that folder and the bar picks it up on its own."}
             </span>
           </button>
         ) : null}
@@ -385,94 +373,41 @@ export function Dashboard() {
           <Stat
             label="Uncategorized"
             value={String(stats.uncategorized)}
-            hint={initialized ? (stats.uncategorized ? "this month" : "All sorted") : undefined}
+            hint={stats.uncategorized ? "this month" : "All sorted"}
           />
-          {displaySetAsides.map((item) =>
-            initialized ? (
-              <SetAsideStat
-                key={item.id}
-                item={item}
-                autoFocus={focusSetAsideId === item.id}
-                onChange={(patch) => updateSetAside(item.id, patch)}
-                onCommit={() => {
-                  void flushLedgerSave(useLedgerStore.getState());
-                }}
-                onRemove={() => {
-                  removeSetAside(item.id);
-                  if (focusSetAsideId === item.id) setFocusSetAsideId(null);
-                  void flushLedgerSave(useLedgerStore.getState());
-                }}
-              />
-            ) : (
-              <Stat
-                key={item.id}
-                label={item.name || "Set aside"}
-                value={formatMoney(item.amount)}
-                tone="reserved"
-                hint="each month"
-                hintTone="reserved"
-              />
-            ),
-          )}
-          {initialized ? (
-            <AddSetAsideCell
-              className={addSetAsideSpan(4 + displaySetAsides.length + 1)}
-              onClick={() => {
-                const id = addSetAside();
-                setFocusSetAsideId(id);
-                void flushLedgerSave(useLedgerStore.getState());
+          {setAsides.map((item) => (
+            <SetAsideStat
+              key={item.id}
+              item={item}
+              autoFocus={focusSetAsideId === item.id}
+              onChange={(patch) => updateSetAside(item.id, patch)}
+              onCommit={() => {
+                void saveLedgerNow(useLedgerStore.getState());
+              }}
+              onRemove={() => {
+                removeSetAside(item.id);
+                if (focusSetAsideId === item.id) setFocusSetAsideId(null);
+                void saveLedgerNow(useLedgerStore.getState());
               }}
             />
-          ) : null}
+          ))}
+          <AddSetAsideCell
+            className={addSetAsideSpan(4 + setAsides.length + 1)}
+            onClick={() => {
+              const id = addSetAside();
+              setFocusSetAsideId(id);
+              void saveLedgerNow(useLedgerStore.getState());
+            }}
+          />
         </section>
 
-        <div className="grid gap-4 lg:grid-cols-5">
-          <Card className="lg:col-span-3">
-            <CardHeader><CardTitle>Where it went</CardTitle></CardHeader>
-            <CardContent>
-              {!detailsReady ? (
-                <Skeleton className="h-40" />
-              ) : cats.length === 0 ? (
-                <p className="py-10 text-sm text-muted-foreground">No spending this month.</p>
-              ) : (
-                <ul className="flex flex-col gap-3">
-                  {cats.map((row, i) => (
-                    <li key={row.id}>
-                      <div className="mb-1 flex items-baseline justify-between gap-3">
-                        <span className="text-sm">{row.name}</span>
-                        <span className="text-sm tabular-nums">{formatMoney(row.total)}</span>
-                      </div>
-                      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                        <div
-                          className="h-full rounded-full"
-                          style={{
-                            width: `${Math.max(4, (row.total / cats[0]!.total) * 100)}%`,
-                            background: CHART_COLORS[i % CHART_COLORS.length],
-                          }}
-                        />
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="lg:col-span-2">
-            <CardHeader><CardTitle>Daily spend</CardTitle></CardHeader>
-            <CardContent>
-              <div className="h-52">
-                {detailsReady ? (
-                  <Suspense fallback={<Skeleton className="h-full" />}>
-                    <DailySpendChart data={daily} />
-                  </Suspense>
-                ) : (
-                  <Skeleton className="h-full" />
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        <PanelGrid
+          ready={detailsReady}
+          transactions={transactions}
+          month={selectedMonth}
+          monthTransactions={monthTx}
+          setAsides={setAsides}
+        />
 
         {detailsReady && unknowns.length > 0 ? (
           <UnknownPanel
@@ -542,14 +477,12 @@ export function Dashboard() {
         <p className="pb-20 text-center text-xs text-muted-foreground">Stored only on this device. Download the clean file anytime.</p>
       </main>
 
-      <ImportSheet
-        open={importOpen}
-        onOpenChange={(open) => {
-          setImportOpen(open);
-          if (!open) {
-            void getRememberedFolder().then((rec) => setFolderName(rec?.name ?? null));
-          }
-        }}
+      <ImportSheet open={importOpen} onOpenChange={setImportOpen} />
+      <FolderPicker
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        startAt={folder?.path || home}
+        onChoose={attach}
       />
       <RulesSheet open={rulesOpen} onOpenChange={setRulesOpen} />
       <AlertDialog open={clearOpen} onOpenChange={setClearOpen}>
@@ -563,7 +496,7 @@ export function Dashboard() {
             <AlertDialogAction
               onClick={() => {
                 clearLedger();
-                void flushLedgerSave(useLedgerStore.getState());
+                void saveLedgerNow(useLedgerStore.getState());
                 toast.success("Ledger cleared");
               }}
             >
@@ -633,7 +566,7 @@ function UnknownPanel({
               value={null}
               onChange={(id) => {
                 categorizeMerchant(m.merchant, id);
-                void flushLedgerSave(useLedgerStore.getState());
+                void saveLedgerNow(useLedgerStore.getState());
                 toast.success(`Always categorize \u201c${m.merchant}\u201d as ${categoryName(id)}`);
               }}
               placeholder="Assign"
@@ -673,7 +606,7 @@ function TransactionRow({ tx }: { tx: Transaction }) {
           value={tx.categoryId}
           onChange={(id) => {
             categorizeOne(tx.id, id, true);
-            void flushLedgerSave(useLedgerStore.getState());
+            void saveLedgerNow(useLedgerStore.getState());
           }}
           size="sm"
           placeholder={tx.categoryId ? undefined : "Set category"}
@@ -693,7 +626,7 @@ function TransactionRow({ tx }: { tx: Transaction }) {
           aria-label="Remove transaction"
           onClick={() => {
             deleteTransaction(tx.id);
-            void flushLedgerSave(useLedgerStore.getState());
+            void saveLedgerNow(useLedgerStore.getState());
           }}
         >
           <Trash2 className="size-4" />
@@ -725,17 +658,6 @@ function summarize(rows: Transaction[], setAsides: SetAside[]) {
   const cashflow = income - spent;
   const allocated = setAsideTotal(setAsides);
   return { spent, income, cashflow, allocated, net: availableNet(cashflow, setAsides), uncategorized };
-}
-
-function previewStats(preview: WidgetPreview) {
-  return {
-    spent: preview.spent,
-    income: preview.income,
-    cashflow: preview.income - preview.spent,
-    allocated: preview.allocated,
-    net: preview.net,
-    uncategorized: preview.uncategorized,
-  };
 }
 
 function pageSlice<T>(items: T[], page: number, pageSize: number) {
@@ -796,30 +718,4 @@ function Pager({
   );
 }
 
-function categoryTotals(rows: Transaction[]) {
-  const map = new Map<string, number>();
-  for (const tx of rows) {
-    if (!isSpend(tx)) continue;
-    const id = tx.categoryId ?? "other";
-    map.set(id, (map.get(id) ?? 0) + Math.abs(tx.amount));
-  }
-  return [...map.entries()]
-    .map(([id, total]) => ({ id, name: CATEGORY_BY_ID[id]?.name ?? "Other", total }))
-    .sort((a, b) => b.total - a.total);
-}
 
-function dailySpend(month: string, rows: Transaction[]) {
-  const [y, m] = month.split("-").map(Number);
-  const days = new Date(y, m, 0).getDate();
-  const totals = Array.from({ length: days }, () => 0);
-  for (const tx of rows) {
-    if (!isSpend(tx)) continue;
-    const d = Number(tx.date.slice(8, 10));
-    if (d >= 1 && d <= days) totals[d - 1] += Math.abs(tx.amount);
-  }
-  return totals.map((spent, i) => ({
-    day: String(i + 1),
-    spent: Math.round(spent * 100) / 100,
-    label: formatDay(`${month}-${String(i + 1).padStart(2, "0")}`),
-  }));
-}
