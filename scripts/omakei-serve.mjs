@@ -12,12 +12,15 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createLedgerApi } from "./ledger-api.mjs";
 import { renderShell } from "./page-shell.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = resolve(process.env.OMAKEI_DIST || join(ROOT, "dist"));
 const HOST = process.env.OMAKEI_HOST || "127.0.0.1";
 const PORT = Number(process.env.OMAKEI_PORT || 8080);
+
+const api = createLedgerApi();
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -44,7 +47,9 @@ function safePath(urlPath) {
 
 async function sendIndex(res, status = 200) {
   const raw = await readFile(join(DIST, "index.html"), "utf8");
-  const body = Buffer.from(renderShell(raw), "utf8");
+  // The ledger rides along with the page so the editor paints real numbers on
+  // the first frame instead of a spinner waiting on a fetch.
+  const body = Buffer.from(renderShell(raw, await api.stateBody()), "utf8");
   res.writeHead(status, {
     "content-type": MIME[".html"],
     "content-length": body.byteLength,
@@ -56,6 +61,7 @@ async function sendIndex(res, status = 200) {
 
 const server = createServer(async (req, res) => {
   try {
+    if (await api.handle(req, res)) return;
     if (req.method !== "GET" && req.method !== "HEAD") {
       res.writeHead(405, { allow: "GET, HEAD" }).end();
       return;

@@ -1,5 +1,5 @@
-import { fingerprint } from "./fingerprint";
-import type { AccountKind, ImportFileResult, ParsedRow } from "./types";
+import { fingerprint } from "./fingerprint.ts";
+import type { AccountKind, ImportFileResult, ParsedRow } from "./types.ts";
 
 const DATE_HEADERS = [
   "date", "transaction date", "trans date", "trans. date", "posting date",
@@ -125,13 +125,22 @@ function looksLikeAmount(s: string): boolean {
 }
 
 export function parseDate(s: string): string | null {
-  const t = s.trim();
+  // OFX stamps the zone as `20260802120000[-7:MST]`. The bracketed part is
+  // never part of the date, and its minus sign used to make the whole value
+  // look like a dashed format, which dropped the transaction.
+  const t = s.trim().replace(/\[[^\]]*\]$/, "");
   if (!t) return null;
   const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const ofx = t.match(/^(\d{4})(\d{2})(\d{2})/);
-  if (ofx && t.length >= 8 && !t.includes("/") && !t.includes("-")) {
-    return `${ofx[1]}-${ofx[2]}-${ofx[3]}`;
+  // A leading run of 8 digits is unambiguous: ISO is handled above, and the
+  // month/day forms below never start with more than four digits.
+  const ofx = t.match(/^(\d{4})(\d{2})(\d{2})(?!\d*[/-])/);
+  if (ofx) {
+    const month = Number(ofx[2]);
+    const day = Number(ofx[3]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${ofx[1]}-${ofx[2]}-${ofx[3]}`;
+    }
   }
   const us = t.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
   if (us) {

@@ -25,6 +25,30 @@ var MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December"
 ]
 
+function stateFilePath(xdgStateHome, home) {
+  var base = String(xdgStateHome || "")
+  if (!base) base = String(home || "") + "/.local/state"
+  return base + "/omakei/state.json"
+}
+
+/**
+ * Read the ledger's location out of the server's state file, so attaching a
+ * folder in the editor is all anyone has to do.
+ */
+function ledgerPathFromState(raw) {
+  try {
+    var data = JSON.parse(String(raw || ""))
+    if (!data || data.version !== 1) return ""
+    if (typeof data.ledgerPath === "string" && data.ledgerPath) return data.ledgerPath
+    if (typeof data.statementsDir === "string" && data.statementsDir) {
+      return String(data.statementsDir).replace(/\/$/, "") + "/omakei-ledger.json"
+    }
+    return ""
+  } catch (e) {
+    return ""
+  }
+}
+
 function expandPath(path, home) {
   var p = String(path || "").replace(/^\s+|\s+$/g, "")
   var root = String(home || "")
@@ -152,7 +176,6 @@ function parseLedger(raw) {
     }
     return {
       selectedMonth: typeof data.selectedMonth === "string" ? data.selectedMonth : "",
-      isSample: data.isSample === true,
       transactions: transactions,
       setAsides: parseSetAsides(data.setAsides)
     }
@@ -254,26 +277,8 @@ function barLabel(summary) {
 }
 
 function editorQuery(summary) {
-  if (!summary || !summary.hasData) return ""
-  var parts = []
-  parts.push("m=" + encodeURIComponent(summary.month || ""))
-  parts.push("sp=" + encodeURIComponent(String(summary.spent)))
-  parts.push("inc=" + encodeURIComponent(String(summary.income)))
-  parts.push("n=" + encodeURIComponent(String(summary.net)))
-  parts.push("u=" + encodeURIComponent(String(summary.uncategorized || 0)))
-  if (Number(summary.allocated) > 0) {
-    parts.push("r=" + encodeURIComponent(String(summary.allocated)))
-  }
-  var asides = summary.setAsides || []
-  for (var i = 0; i < asides.length; i++) {
-    var item = asides[i]
-    if (!item) continue
-    var name = String(item.name || "").replace(/\t/g, " ")
-    parts.push(
-      "sa=" + encodeURIComponent(String(item.id || "") + "\t" + name + "\t" + String(item.amount || 0))
-    )
-  }
-  return parts.join("&")
+  if (!summary || !summary.month) return ""
+  return "m=" + encodeURIComponent(summary.month)
 }
 
 function editorUrl(base, summary) {
@@ -295,11 +300,15 @@ function shellQuote(value) {
   return "'" + String(value || "").replace(/'/g, "'\\''") + "'"
 }
 
+/**
+ * Always route through the plugin's own opener: it starts the editor when
+ * nothing is serving yet, which `omarchy launch browser` cannot do. Callers
+ * without a plugin directory get "" rather than a command that opens a dead
+ * page.
+ */
 function openEditorCommand(base, summary, pluginDir) {
   var url = editorUrl(base, summary)
-  if (!url) return ""
-  if (pluginDir) {
-    return shellQuote(String(pluginDir).replace(/\/$/, "") + "/scripts/omakei-open") + " " + shellQuote(url)
-  }
-  return "omarchy launch browser " + shellQuote(url)
+  var dir = String(pluginDir || "").replace(/\/$/, "")
+  if (!url || !dir) return ""
+  return shellQuote(dir + "/scripts/omakei-open") + " " + shellQuote(url)
 }

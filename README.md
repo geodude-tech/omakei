@@ -21,11 +21,11 @@ Update later with `omarchy plugin update omakei`.
 You do not need a ledger yet.
 
 1. Click the **Omakei** pill on the bar (or **Open Omakei** in the popup). The editor starts the first time you open it, which takes about a second; nothing runs in the background while Omakei is closed.
-2. Choose the folder that holds your transaction statements — any folder you already use, or an empty one you will drop exports into.
+2. Choose the folder that holds your statements — any folder you already use, or an empty one you will drop exports into.
 3. Omakei reads the files, auto-categorizes what it knows, and writes `omakei-ledger.json` into that same folder.
-4. The pill shows this month’s net. It updates when the ledger file changes.
+4. The pill shows this month’s net. It updates whenever the ledger file changes.
 
-If the pill still says **Omakei**, set **Ledger file** in the widget settings to the `omakei-ledger.json` in the folder you attached.
+There is nothing to configure. Omakei records which folder you attached, and the widget reads the ledger from there on its own.
 
 ### Statement files
 
@@ -34,7 +34,7 @@ Use whatever your bank already gives you.
 - **Preferred:** OFX or QFX
 - **Also fine:** CSV (the usual download), TSV, OFC, or a `.txt` export
 
-Subfolders are fine. Drop in new months whenever you have them and open Omakei again to sync.
+Subfolders are fine, and a folder named `Credit`, `Mortgage`, `Checking`, or `Savings` tells Omakei what kind of account its files came from. Drop in new months whenever you have them; Omakei picks them up the next time you open it.
 
 ### Categories
 
@@ -52,7 +52,11 @@ In the popup: `[` / `]` change month, `t` jumps to this month, `o` opens Omakei,
 
 Statements and the generated ledger stay in the folder you attached. Removing the plugin does not delete that folder. There is no account, no cloud, and no telemetry.
 
-The editor listens on `127.0.0.1` only, so nothing else on your network can reach it.
+The editor listens on `127.0.0.1` only, and refuses requests that arrive under another host name or from another origin, so nothing else on your network — or in your browser — can reach your ledger.
+
+### Keeping the ledger somewhere else
+
+If you want the widget to read a ledger the editor did not write, set **Ledger file** in the widget settings to its path. That overrides the folder Omakei recorded. Leave it empty otherwise.
 
 ## Remove
 

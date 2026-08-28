@@ -1,18 +1,8 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
-import { extractMerchant } from "./fingerprint";
-import {
-  mergeImport,
-  refreshCategories,
-  seedRules,
-  upsertRule,
-} from "./ledger";
-import {
-  fetchLocalDiskLedger,
-  parseLedgerData,
-  scheduleLedgerSave,
-} from "./ledger-file";
-import { makeSetAside, parseSetAsides } from "./set-asides";
+import { extractMerchant } from "./fingerprint.ts";
+import { mergeImport, refreshCategories, seedRules, upsertRule } from "./ledger.ts";
+import { scheduleLedgerSave } from "./ledger-file.ts";
+import { makeSetAside, parseSetAsides } from "./set-asides.ts";
 import type {
   AccountKind,
   CategorizeRule,
@@ -20,18 +10,19 @@ import type {
   ImportSummary,
   SetAside,
   Transaction,
-} from "./types";
-import { readWidgetPreviewFromLocation } from "./widget-preview";
+} from "./types.ts";
 
-const PERSIST_KEY = "folio-ledger-v1";
-
+/**
+ * The ledger in memory. The file in the attached folder is the only copy that
+ * outlives the tab: every change here is written back through the server, so
+ * there is nothing cached in the browser to drift out of step with it.
+ */
 interface LedgerState {
   transactions: Transaction[];
   rules: CategorizeRule[];
   setAsides: SetAside[];
   initialized: boolean;
   selectedMonth: string;
-  lastSummary: ImportSummary | null;
   setMonth: (month: string) => void;
   importFiles: (files: ImportFileResult[]) => ImportSummary;
   loadSnapshot: (snapshot: {
@@ -54,205 +45,104 @@ interface LedgerState {
   ) => void;
 }
 
-function latestMonth(transactions: Transaction[]): string {
-  if (transactions.length === 0) {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  }
-  return [...transactions].sort((a, b) => (a.date < b.date ? 1 : -1))[0]!.date.slice(
-    0,
-    7,
-  );
-}
-
-function currentMonthKey(): string {
+export function currentMonthKey(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function openingMonth(fallback: string): string {
-  return readWidgetPreviewFromLocation()?.month ?? fallback;
+function latestMonth(transactions: Transaction[]): string {
+  if (transactions.length === 0) return currentMonthKey();
+  let latest = transactions[0]!.date;
+  for (const tx of transactions) if (tx.date > latest) latest = tx.date;
+  return latest.slice(0, 7);
 }
 
-function emptyLedger() {
-  return {
-    transactions: [] as Transaction[],
-    rules: seedRules(),
-    setAsides: [] as SetAside[],
-    initialized: false as const,
-    selectedMonth: openingMonth(currentMonthKey()),
-    lastSummary: null as ImportSummary | null,
-  };
-}
+export const useLedgerStore = create<LedgerState>()((set, get) => ({
+  transactions: [],
+  rules: seedRules(),
+  setAsides: [],
+  initialized: false,
+  selectedMonth: currentMonthKey(),
 
-function snapshotInitial(state: {
-  transactions: Transaction[];
-  rules: CategorizeRule[];
-  selectedMonth?: string;
-  setAsides?: SetAside[];
-}) {
-  return {
-    transactions: state.transactions,
-    rules: state.rules.length > 0 ? state.rules : seedRules(),
-    setAsides: parseSetAsides(state.setAsides),
-    initialized: true as const,
-    selectedMonth: openingMonth(
-      typeof state.selectedMonth === "string" && state.selectedMonth
-        ? state.selectedMonth
-        : latestMonth(state.transactions),
-    ),
-    lastSummary: null as ImportSummary | null,
-  };
-}
+  setMonth: (month) => set({ selectedMonth: month }),
 
-function readPreloadedLedger() {
-  if (typeof window === "undefined") return null;
-  const body = window.__FOLIO_LEDGER;
-  if (!body?.configured || body.ledger == null) return null;
-  const snapshot = parseLedgerData(body.ledger);
-  if (!snapshot || snapshot.transactions.length === 0) return null;
-  return snapshotInitial(snapshot);
-}
+  importFiles: (files) => {
+    const { transactions, summary } = mergeImport(get().transactions, files, get().rules);
+    set({ transactions, initialized: true, selectedMonth: latestMonth(transactions) });
+    return summary;
+  },
 
-function readCachedLedger() {
-  if (typeof globalThis.localStorage === "undefined") return null;
-  try {
-    const raw = globalThis.localStorage.getItem(PERSIST_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { state?: Partial<LedgerState> };
-    const state = parsed.state;
-    if (!state || (state as { isSample?: boolean }).isSample) return null;
-    if (!Array.isArray(state.transactions) || state.transactions.length === 0) return null;
-    return snapshotInitial({
-      transactions: state.transactions,
-      rules: Array.isArray(state.rules) ? state.rules : [],
-      selectedMonth: state.selectedMonth,
-      setAsides: state.setAsides,
+  loadSnapshot: (snapshot) => {
+    set({
+      transactions: snapshot.transactions,
+      rules: snapshot.rules.length > 0 ? snapshot.rules : seedRules(),
+      ...(snapshot.setAsides !== undefined
+        ? { setAsides: parseSetAsides(snapshot.setAsides) }
+        : {}),
+      initialized: true,
+      selectedMonth: snapshot.selectedMonth || latestMonth(snapshot.transactions),
     });
-  } catch {
-    return null;
-  }
-}
+  },
 
-const INITIAL = readPreloadedLedger() ?? readCachedLedger() ?? emptyLedger();
+  categorizeMerchant: (merchant, categoryId) => {
+    const rules = upsertRule(get().rules, merchant.trim(), categoryId);
+    set({ rules, transactions: refreshCategories(get().transactions, rules) });
+  },
 
-if (typeof window !== "undefined") {
-  void fetchLocalDiskLedger();
-}
+  categorizeOne: (id, categoryId, always) => {
+    const tx = get().transactions.find((t) => t.id === id);
+    if (!tx) return;
+    if (!always) {
+      set({
+        transactions: get().transactions.map((t) => (t.id === id ? { ...t, categoryId } : t)),
+      });
+      return;
+    }
+    const rules = upsertRule(get().rules, extractMerchant(tx.description), categoryId);
+    set({ rules, transactions: refreshCategories(get().transactions, rules) });
+  },
 
-export const useLedgerStore = create<LedgerState>()(
-  persist(
-    (set, get) => ({
-      ...INITIAL,
-      setMonth: (month) => set({ selectedMonth: month }),
-      importFiles: (files) => {
-        const { transactions, summary } = mergeImport(get().transactions, files, get().rules);
-        set({
-          transactions,
-          initialized: true,
-          lastSummary: summary,
-          selectedMonth: latestMonth(transactions),
-        });
-        return summary;
-      },
-      loadSnapshot: (snapshot) => {
-        const rules = snapshot.rules.length > 0 ? snapshot.rules : seedRules();
-        set({
-          transactions: snapshot.transactions,
-          rules,
-          ...(snapshot.setAsides !== undefined
-            ? { setAsides: parseSetAsides(snapshot.setAsides) }
-            : {}),
-          initialized: true,
-          lastSummary: null,
-          selectedMonth: snapshot.selectedMonth || latestMonth(snapshot.transactions),
-        });
-      },
-      categorizeMerchant: (merchant, categoryId) => {
-        const pattern = merchant.trim();
-        const rules = upsertRule(get().rules, pattern, categoryId);
-        set({ rules, transactions: refreshCategories(get().transactions, rules) });
-      },
-      categorizeOne: (id, categoryId, always) => {
-        const tx = get().transactions.find((t) => t.id === id);
-        if (!tx) return;
-        if (!always) {
-          set({
-            transactions: get().transactions.map((t) =>
-              t.id === id ? { ...t, categoryId } : t,
-            ),
-          });
-          return;
+  deleteTransaction: (id) =>
+    set({ transactions: get().transactions.filter((t) => t.id !== id) }),
+
+  deleteRule: (id) => set({ rules: get().rules.filter((r) => r.id !== id) }),
+
+  addSetAside: () => {
+    const item = makeSetAside();
+    set({ setAsides: [...get().setAsides, item] });
+    return item.id;
+  },
+
+  updateSetAside: (id, patch) => {
+    set({
+      setAsides: get().setAsides.map((item) => {
+        if (item.id !== id) return item;
+        const next = { ...item, ...patch };
+        if (typeof patch.amount === "number") {
+          next.amount = Number.isFinite(patch.amount)
+            ? Math.max(0, Math.round(patch.amount * 100) / 100)
+            : item.amount;
         }
-        const pattern = extractMerchant(tx.description);
-        const rules = upsertRule(get().rules, pattern, categoryId);
-        set({ rules, transactions: refreshCategories(get().transactions, rules) });
-      },
-      deleteTransaction: (id) =>
-        set({ transactions: get().transactions.filter((t) => t.id !== id) }),
-      deleteRule: (id) => set({ rules: get().rules.filter((r) => r.id !== id) }),
-      addSetAside: () => {
-        const item = makeSetAside();
-        set({ setAsides: [...get().setAsides, item] });
-        return item.id;
-      },
-      updateSetAside: (id, patch) => {
-        set({
-          setAsides: get().setAsides.map((item) => {
-            if (item.id !== id) return item;
-            const next = { ...item, ...patch };
-            if (typeof patch.amount === "number") {
-              next.amount = Number.isFinite(patch.amount)
-                ? Math.max(0, Math.round(patch.amount * 100) / 100)
-                : item.amount;
-            }
-            return next;
-          }),
-        });
-      },
-      removeSetAside: (id) =>
-        set({ setAsides: get().setAsides.filter((item) => item.id !== id) }),
-      clearLedger: () =>
-        set({
-          transactions: [],
-          initialized: true,
-          lastSummary: null,
-          selectedMonth: latestMonth([]),
-        }),
-      updateAccount: (filename, patch) => {
-        const transactions = refreshCategories(
-          get().transactions.map((t) =>
-            t.sourceFile === filename ? { ...t, ...patch } : t,
-          ),
-          get().rules,
-        );
-        set({ transactions });
-      },
-    }),
-    {
-      name: PERSIST_KEY,
-      skipHydration: true,
-      onRehydrateStorage: () => (state) => {
-        if (!state) return;
-        if ((state as { isSample?: boolean }).isSample) {
-          state.transactions = [];
-          state.setAsides = [];
-          state.initialized = false;
-          state.lastSummary = null;
-          return;
-        }
-        state.setAsides = parseSetAsides(state.setAsides);
-      },
-      partialize: (state) => ({
-        transactions: state.transactions,
-        rules: state.rules,
-        setAsides: state.setAsides,
-        initialized: state.initialized,
-        selectedMonth: state.selectedMonth,
+        return next;
       }),
-    },
-  ),
-);
+    });
+  },
+
+  removeSetAside: (id) =>
+    set({ setAsides: get().setAsides.filter((item) => item.id !== id) }),
+
+  clearLedger: () =>
+    set({ transactions: [], initialized: true, selectedMonth: currentMonthKey() }),
+
+  updateAccount: (filename, patch) => {
+    set({
+      transactions: refreshCategories(
+        get().transactions.map((t) => (t.sourceFile === filename ? { ...t, ...patch } : t)),
+        get().rules,
+      ),
+    });
+  },
+}));
 
 useLedgerStore.subscribe((state) => {
   scheduleLedgerSave(state);

@@ -5,6 +5,8 @@
 import { execFileSync } from "node:child_process";
 
 const BLOCKED = /\.(csv|tsv|ofx|qfx|ofc)$/i;
+// `folio-ledger.json` is what an early build wrote; still blocked so an old
+// one cannot be committed by accident.
 const BLOCKED_PATH =
   /(^|\/)(Financial_Statements|statements|data\/statements)(\/|$)|(folio|omakei)-ledger\.json$/i;
 

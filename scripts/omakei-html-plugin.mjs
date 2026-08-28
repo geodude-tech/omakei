@@ -1,22 +1,25 @@
 /**
- * Fills index.html's placeholders.
+ * Fills index.html's placeholders on the dev server.
  *
- * Dev does the whole shell inline. A build only bakes in the boot script and
- * leaves `<!--omakei:head-->` for `scripts/omakei-serve.mjs` to fill per
- * request, so the committed `dist/` carries no machine's theme.
+ * A build leaves both `<!--omakei:head-->` and `<!--omakei:state-->` in place
+ * for `scripts/omakei-serve.mjs` to fill per request, so the committed `dist/`
+ * carries neither a machine's theme nor anyone's ledger.
  */
-import { applyShell, injectBoot } from "./page-shell.mjs";
+import { applyShell } from "./page-shell.mjs";
+import { createLedgerApi } from "./ledger-api.mjs";
 import { loadOmarchyTheme, omarchyThemePaths } from "./omarchy-theme.mjs";
 
 export function omakeiHtmlPlugin() {
   let isBuild = false;
+  const api = createLedgerApi();
   return {
     name: "omakei:html",
     configResolved(config) {
       isBuild = config.command === "build";
     },
-    transformIndexHtml(html) {
-      return isBuild ? injectBoot(html) : applyShell(html, loadOmarchyTheme());
+    async transformIndexHtml(html) {
+      if (isBuild) return html;
+      return applyShell(html, loadOmarchyTheme(), await api.stateBody());
     },
     configureServer(server) {
       const paths = omarchyThemePaths();

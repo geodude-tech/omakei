@@ -10,17 +10,8 @@ import { join } from "node:path";
 
 const HEX = /^#([0-9a-fA-F]{6})$/;
 
-const FALLBACK = {
-  enabled: false,
-  mode: "light",
-  name: "",
-  background: "#f3efe7",
-  foreground: "#1c1914",
-  accent: "#2a4038",
-};
-
 export function omarchyThemePaths(env = process.env) {
-  if (env.FOLIO_DISABLE_OMARCHY_THEME === "1") return null;
+  if (env.OMAKEI_DISABLE_OMARCHY_THEME === "1") return null;
   const dir = env.OMARCHY_THEME_DIR || join(homedir(), ".local/state/omarchy/current/theme");
   return {
     dir,

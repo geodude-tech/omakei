@@ -19,10 +19,19 @@ Panel {
   readonly property color contentUrgent: bar ? bar.urgent : Color.urgent
   readonly property color contentDim: Qt.darker(contentForeground, 1.45)
   readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property string ledgerPath: Model.expandPath(
+  /**
+   * The editor's server records the attached folder, so the ledger is found
+   * without anyone typing a path. The widget setting still wins when it is
+   * set, for a ledger kept somewhere the editor did not put it.
+   */
+  readonly property string configuredLedgerPath: Model.expandPath(
     (settings && settings.ledgerPath) ? settings.ledgerPath : "",
     Quickshell.env("HOME")
   )
+  property string discoveredLedgerPath: ""
+  readonly property string ledgerPath: configuredLedgerPath !== ""
+    ? configuredLedgerPath
+    : discoveredLedgerPath
   readonly property string appUrl: (settings && settings.appUrl) ? settings.appUrl : "http://127.0.0.1:8080/"
 
   property date today: new Date()
@@ -133,6 +142,17 @@ Panel {
   readonly property color reservedColor: Qt.tint(contentForeground, "#66c4a35a")
 
   FileView {
+    id: stateFile
+    path: Model.stateFilePath(Quickshell.env("XDG_STATE_HOME"), Quickshell.env("HOME"))
+    preload: true
+    blockLoading: true
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.discoveredLedgerPath = Model.ledgerPathFromState(stateFile.text())
+  }
+
+  FileView {
     id: ledgerFile
     path: root.ledgerPath
     preload: true
@@ -147,6 +167,7 @@ Panel {
   }
 
   Component.onCompleted: {
+    if (stateFile.loaded) root.discoveredLedgerPath = Model.ledgerPathFromState(stateFile.text())
     if (ledgerFile.loaded) root.ingestText()
   }
 
@@ -454,7 +475,7 @@ Panel {
             width: parent.width
             visible: !root.monthSummary.hasData
             wrapMode: Text.WordWrap
-            text: "No ledger yet. Open Omakei and choose a folder of statements."
+            text: "No ledger yet. Open Omakei and choose the folder your statements are in."
             color: root.contentDim
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.body
