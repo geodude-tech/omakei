@@ -14,7 +14,25 @@ The editor is a static SPA served by `scripts/omakei-serve.mjs`. `dist/` is comm
 
 Both the Vite dev server and `omakei-serve.mjs` mount that same handler, so development and an installed plugin run identical disk code. Anything that only one of them can do is a bug: that split is what let an earlier version ship a data path nobody exercised by hand.
 
-Because the server knows the folder's real path, it records it in `~/.local/state/omakei/state.json`, and `Panel.qml` reads the ledger from there. That file's shape is part of the plugin contract. Nobody should have to type a ledger path into widget settings; the `ledgerPath` setting exists only to override the recorded one.
+Because the server knows the folder's real path, it records it in `~/.local/state/omakei/state.json`. That file's shape is part of the plugin contract. Nobody should have to type a ledger path into widget settings; the `ledgerPath` setting exists only to override the recorded one.
+
+**The widget does not read files.** `Panel.qml` used to open the state file and the ledger through QML `FileView`s, which is a second path onto disk and cannot refuse a symlink, check that it opened a regular file, or stop reading at a size. Worse, `BarWidget.qml` loads the panel eagerly and those reads blocked, so an oversized ledger or a stalled mount hung the whole Omarchy bar at login. The panel now runs `scripts/omakei-read-ledger.mjs` in a `Process` and parses what it prints. Keep it that way: if the widget needs something else off disk, extend the reader rather than adding a `FileView`.
+
+The one file the widget still watches is `~/.local/state/omakei/ledger-revision`, which the server rewrites whenever the ledger changes or a folder is attached. It is watched with `preload: false` and is never read — `text()` and `reload()` are never called on it — so it costs a change notification and nothing else. That is what keeps the bar live without pulling an unbounded file into the shell.
+
+## Reading the ledger
+
+`docs/ledger.md` is the contract for querying the ledger from outside the app —
+the other half of the loop the panels finish. It states where the ledger lives and
+the five rules that make a total correct, the first of which is that
+`categoryId === "transfers"` is neither spend nor income. Skipping that one
+overstates spending by most of a credit-card payment while leaving net looking
+plausible, so the doc exists to be read before the first query, not after a wrong
+answer.
+
+`src/lib/finance/ledger-contract.test.ts` parses the doc and compares it to the
+code, so a renamed category fails `npm test` rather than misleading an agent.
+Keep the doc true; do not duplicate its category table anywhere.
 
 ## Panels
 
@@ -44,6 +62,8 @@ Rebuild and commit `dist/` whenever a build input changes. `npm run build` stamp
 git config core.hooksPath .githooks
 ```
 
+The stamp hashes the files git is **tracking**, so `git add` a brand-new file before building — a build run while it is still untracked stamps a hash that omits it, and the hook then rejects the commit.
+
 Build inputs are listed in `scripts/build-inputs.mjs`. Tests are excluded; QML and the server scripts ship as source, except `page-shell.mjs`, whose class names Tailwind scans. Dependency bumps are not tracked, so rebuild by hand after changing `package.json`.
 
 ## Product
@@ -61,16 +81,22 @@ Build inputs are listed in `scripts/build-inputs.mjs`. Tests are excluded; QML a
 ## Data
 
 - Personal statements and `omakei-ledger.json` are gitignored. Never commit them.
+- `scripts/check-no-personal-data.mjs` reads staged content in the pre-commit hook and every tracked file in `npm test`. It catches data with a recognisable shape — card numbers, SSNs, routing and account numbers, IBANs, real email addresses, personal phone numbers, street addresses. It **cannot** tell that a merchant, a balance, or a name is yours; that judgement is the rule below, and review is what enforces it. Treat a clean run as one guard passing, not as proof the diff is safe.
+- For household-specific words, put them one per line in `.githooks/personal-terms`, which is gitignored — a committed block list would itself be the leak. Matches are reported as `[redacted]`.
+- A line that must keep a matching string carries `omakei:allow-personal`, on that line or the one above it. Use it for a merchant's public support number, not to silence a real hit.
 - Never put personal data in tests, fixtures, comments, or default rules: no household-specific merchants, account numbers, balances, addresses, or family names. Invent neutral values; a test that needs a merchant should use a well-known national chain.
 - Statement file extensions are gitignored, so parser fixtures are **inline strings** in `parse.test.ts`, never files.
 - No default ledger path. Nothing is attached until the user picks a folder.
-- Optional dev convenience: `OMAKEI_STATEMENTS_DIR` seeds the same state an attach would write. It must be exported in the environment — `OMAKEI_STATEMENTS_DIR=/path npm run dev`. Putting it in `.env.local` does **not** work: Vite does not load `.env` files into `process.env`, and `ledger-api-plugin.mjs` never calls `loadEnv`, so the server never sees it. `.env.example` says otherwise and is wrong.
+- Optional dev convenience: `OMAKEI_STATEMENTS_DIR` **seeds** the state an attach would write — it does not override it. `currentDir()` prefers the saved `statementsDir`, so on a machine that has ever attached a folder the variable is ignored and `npm run dev` reads the real ledger. Do not "fix" this by letting the variable win: it persists through the same `persist()` every attach uses, so an overriding seed would rewrite the user's real `state.json` and point their bar pill at dev data.
+- **Develop against a sandbox, not your own ledger:** `npm run dev:isolated` sets `XDG_STATE_HOME` to `.dev/state` alongside `OMAKEI_STATEMENTS_DIR=.dev/statements`. Moving the state dir is what makes the seed apply — there is no saved folder in a fresh one to lose to — and the real `state.json` is neither read nor written. `.dev/` is gitignored. This is env-only: no dev-only code path, same handler, same disk code.
+- Both variables must be exported in the environment. Putting them in `.env.local` does **not** work: Vite does not load `.env` files into `process.env`, and `ledger-api-plugin.mjs` never calls `loadEnv`, so the server never sees them.
 
 ## Commands
 
-- `npm test` — finance and script tests, no-statements check, panel-contract check, plugin check
+- `npm test` — finance and script tests, ledger-contract check, no-statements check, panel-contract check, plugin check
 - `npm run typecheck`
 - `npm run dev` — ledger editor at http://127.0.0.1:8080/ (live theme reload)
+- `npm run dev:isolated` — same, against the gitignored `.dev/` sandbox instead of your real statements
 - `npm run build` — writes `dist/`; commit the result
 - `npm run start` — serve the committed `dist/` the way installers do
 

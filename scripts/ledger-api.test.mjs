@@ -5,7 +5,18 @@
  */
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+  mkdirSync,
+} from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -263,6 +274,302 @@ test("OMAKEI_STATEMENTS_DIR seeds the same state an attach would write", async (
   const state = await api.stateBody();
   assert.equal(state.folder.path, statements);
   assert.equal(parseStateFile(readFileSync(api.statePath, "utf8")).statementsDir, statements);
+});
+
+/*
+ * The seed only seeds. These two pin why `npm run dev:isolated` moves
+ * XDG_STATE_HOME rather than making the env var win: a saved folder always
+ * beats the variable, so the only way to develop off a sandbox is to develop
+ * against a state dir that has no saved folder in it.
+ */
+
+test("a saved folder beats OMAKEI_STATEMENTS_DIR", async () => {
+  const { home, root, statements } = tempTree();
+  const stateDir = join(home, ".state", "omakei");
+  const sandbox = join(root, "sandbox");
+  mkdirSync(sandbox, { recursive: true });
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(join(stateDir, "state.json"), renderStateFile(statements));
+
+  const api = createLedgerApi({
+    env: { XDG_STATE_HOME: join(home, ".state"), OMAKEI_STATEMENTS_DIR: sandbox },
+    home,
+  });
+
+  // The attached folder wins, and the seed does not rewrite it.
+  assert.equal((await api.stateBody()).folder.path, statements);
+  assert.equal(parseStateFile(readFileSync(api.statePath, "utf8")).statementsDir, statements);
+});
+
+test("a separate XDG_STATE_HOME leaves the real state file untouched", async () => {
+  const { home, root, statements } = tempTree();
+  const realStateDir = join(home, ".state", "omakei");
+  const realStatePath = join(realStateDir, "state.json");
+  const sandbox = join(root, "sandbox");
+  mkdirSync(sandbox, { recursive: true });
+  mkdirSync(realStateDir, { recursive: true });
+  writeFileSync(realStatePath, renderStateFile(statements));
+  const before = readFileSync(realStatePath, "utf8");
+
+  const api = createLedgerApi({
+    env: { XDG_STATE_HOME: join(root, "dev-state"), OMAKEI_STATEMENTS_DIR: sandbox },
+    home,
+  });
+
+  assert.equal((await api.stateBody()).folder.path, sandbox);
+  assert.notEqual(api.statePath, realStatePath);
+  assert.equal(readFileSync(realStatePath, "utf8"), before);
+});
+
+/* ------------------------------------------------------- disk-path hardening
+ *
+ * Everything below fails against a `readFile(path)` / `writeFile(path + ".tmp")`
+ * implementation. They are the reason the reads are descriptor-bound and the
+ * temp file is exclusive.
+ */
+
+/** Attach `statements` and return the running server. */
+async function attached(home, statements) {
+  const s = await serve(home);
+  await s.call("/folder", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path: statements }),
+  });
+  return s;
+}
+
+test("a symlink in place of the ledger is not followed", async () => {
+  const { root, home, statements } = tempTree();
+  const secret = join(root, "secret.json");
+  writeFileSync(secret, JSON.stringify({ version: 1, transactions: [{ id: "leaked" }], rules: [] }));
+  const s = await attached(home, statements);
+  try {
+    symlinkSync(secret, join(statements, "omakei-ledger.json"));
+    const state = await (await s.call("/state")).json();
+    assert.equal(state.ledger, null, "a symlinked ledger must read as no ledger at all");
+  } finally {
+    await s.close();
+  }
+});
+
+test("a ledger larger than the cap never enters the server", async () => {
+  const { home, statements } = tempTree();
+  const s = await attached(home, statements);
+  try {
+    // Deliberately *valid* JSON above the cap. A sparse file would be rejected
+    // for being unparseable and would prove nothing about the size limit.
+    const filler = "x".repeat(1024);
+    const transactions = Array.from({ length: 21 * 1024 }, (_, i) => ({ id: `t${i}`, note: filler }));
+    const path = join(statements, "omakei-ledger.json");
+    writeFileSync(path, JSON.stringify({ version: 1, transactions, rules: [] }));
+    assert.ok(statSync(path).size > 20 * 1024 * 1024, "fixture must exceed the cap");
+    const state = await (await s.call("/state")).json();
+    assert.equal(state.ledger, null, "an oversized ledger is refused, not parsed");
+  } finally {
+    await s.close();
+  }
+});
+
+test("a statement that is a symlink is refused", async () => {
+  const { root, home, statements } = tempTree();
+  const outside = join(root, "outside.csv");
+  writeFileSync(outside, "Date,Description,Amount\n2026-08-02,SECRET,-1\n");
+  writeFileSync(join(statements, "real.csv"), "Date,Description,Amount\n2026-08-02,SHOP,-2\n");
+  symlinkSync(outside, join(statements, "linked.csv"));
+  const s = await attached(home, statements);
+  try {
+    // readdir reports the symlink as a symlink, so it is not offered either.
+    const listing = await (await s.call("/statements")).json();
+    assert.deepEqual(listing.files.map((f) => f.name), ["real.csv"]);
+
+    // And asking for it by name anyway does not read through it.
+    const res = await s.call("/statements/file?path=linked.csv");
+    assert.equal(res.status, 404);
+  } finally {
+    await s.close();
+  }
+});
+
+test("an oversized statement is refused with 413, not read", async () => {
+  const { home, statements } = tempTree();
+  const path = join(statements, "huge.csv");
+  writeFileSync(path, "Date,Description,Amount\n");
+  truncateSync(path, 33 * 1024 * 1024);
+  const s = await attached(home, statements);
+  try {
+    const res = await s.call("/statements/file?path=huge.csv");
+    assert.equal(res.status, 413);
+  } finally {
+    await s.close();
+  }
+});
+
+test("a FIFO left in the folder does not hang the server", async () => {
+  const { home, statements } = tempTree();
+  const fifo = join(statements, "pipe.csv");
+  try {
+    execFileSync("mkfifo", [fifo]);
+  } catch {
+    return; // no mkfifo on this machine; nothing to assert
+  }
+  const s = await attached(home, statements);
+  try {
+    // Without O_NONBLOCK this open blocks until someone writes to the pipe,
+    // which is never, and the request never returns.
+    const res = await Promise.race([
+      s.call("/statements/file?path=pipe.csv"),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("open blocked")), 4000)),
+    ]);
+    assert.equal(res.status, 404, "a FIFO is not a regular file");
+  } finally {
+    await s.close();
+  }
+});
+
+test("a symlink at the predictable temp path cannot capture the write", async () => {
+  const { root, home, statements } = tempTree();
+  const canary = join(root, "canary.txt");
+  writeFileSync(canary, "untouched");
+  const s = await attached(home, statements);
+  try {
+    // This is exactly the old temp name. Under the previous writeAtomic the
+    // ledger JSON went straight through it and overwrote the canary.
+    symlinkSync(canary, join(statements, "omakei-ledger.json.tmp"));
+    const put = await s.call("/ledger", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 1, transactions: [], rules: [], selectedMonth: "2026-08" }),
+    });
+    assert.equal(put.status, 200);
+    assert.equal(readFileSync(canary, "utf8"), "untouched", "the write must not follow the planted link");
+    assert.match(readFileSync(join(statements, "omakei-ledger.json"), "utf8"), /"version":1/);
+  } finally {
+    await s.close();
+  }
+});
+
+test("a symlinked destination is replaced, not written through", async () => {
+  const { root, home, statements } = tempTree();
+  const canary = join(root, "canary.json");
+  writeFileSync(canary, "untouched");
+  const s = await attached(home, statements);
+  try {
+    const dest = join(statements, "omakei-ledger.json");
+    symlinkSync(canary, dest);
+    const put = await s.call("/ledger", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 1, transactions: [], rules: [], selectedMonth: "2026-08" }),
+    });
+    assert.equal(put.status, 200);
+    assert.equal(readFileSync(canary, "utf8"), "untouched");
+    assert.equal(statSync(dest).isSymbolicLink?.() ?? false, false);
+    assert.throws(() => readlinkSync(dest), "the link itself was replaced by the real file");
+  } finally {
+    await s.close();
+  }
+});
+
+test("a symlinked state file is not followed on startup", async () => {
+  const { root, home, statements } = tempTree();
+  const elsewhere = join(root, "elsewhere.json");
+  writeFileSync(elsewhere, renderStateFile(statements));
+  const stateDir = join(home, ".state", "omakei");
+  mkdirSync(stateDir, { recursive: true });
+  symlinkSync(elsewhere, join(stateDir, "state.json"));
+  const s = await serve(home);
+  try {
+    const state = await (await s.call("/state")).json();
+    assert.equal(state.folder, null, "a symlinked state file records no folder");
+  } finally {
+    await s.close();
+  }
+});
+
+test("no temp file is left behind by a successful write", async () => {
+  const { home, statements } = tempTree();
+  const s = await attached(home, statements);
+  try {
+    await s.call("/ledger", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 1, transactions: [], rules: [], selectedMonth: "2026-08" }),
+    });
+    const { readdirSync } = await import("node:fs");
+    const leftovers = readdirSync(statements).filter((f) => f.endsWith(".tmp"));
+    assert.deepEqual(leftovers, []);
+  } finally {
+    await s.close();
+  }
+});
+
+test("the revision file changes whenever the widget would need to re-read", async () => {
+  const { home, statements } = tempTree();
+  const s = await serve(home);
+  try {
+    // Attaching is itself a change: it decides which ledger is current.
+    await s.call("/folder", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: statements }),
+    });
+    const afterAttach = readFileSync(s.api.revisionPath, "utf8");
+    assert.match(afterAttach, /^\d+\n$/, "the token is only there to make the file change");
+
+    await new Promise((r) => setTimeout(r, 2));
+    await s.call("/ledger", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 1, transactions: [], rules: [], selectedMonth: "2026-08" }),
+    });
+    const afterSave = readFileSync(s.api.revisionPath, "utf8");
+    assert.notEqual(afterSave, afterAttach, "saving the ledger has to move it");
+
+    await new Promise((r) => setTimeout(r, 2));
+    await s.call("/folder", { method: "DELETE" });
+    assert.notEqual(readFileSync(s.api.revisionPath, "utf8"), afterSave, "so does detaching");
+  } finally {
+    await s.close();
+  }
+});
+
+test("a rejected ledger does not move the revision", async () => {
+  const { home, statements } = tempTree();
+  const s = await attached(home, statements);
+  try {
+    const before = readFileSync(s.api.revisionPath, "utf8");
+    await new Promise((r) => setTimeout(r, 2));
+    const bad = await s.call("/ledger", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 9, nope: true }),
+    });
+    assert.equal(bad.status, 400);
+    assert.equal(readFileSync(s.api.revisionPath, "utf8"), before, "nothing changed, so nothing to re-read");
+  } finally {
+    await s.close();
+  }
+});
+
+test("a symlinked revision file is not written through", async () => {
+  const { root, home, statements } = tempTree();
+  const canary = join(root, "canary.txt");
+  writeFileSync(canary, "untouched");
+  const s = await serve(home);
+  try {
+    mkdirSync(join(home, ".state", "omakei"), { recursive: true });
+    symlinkSync(canary, join(home, ".state", "omakei", "ledger-revision"));
+    const put = await s.call("/folder", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: statements }),
+    });
+    assert.equal(put.status, 200, "a hostile revision file must not break attaching");
+    assert.equal(readFileSync(canary, "utf8"), "untouched");
+  } finally {
+    await s.close();
+  }
 });
 
 test("path and header helpers", () => {

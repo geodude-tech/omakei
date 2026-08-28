@@ -22,16 +22,14 @@ Panel {
   /**
    * The editor's server records the attached folder, so the ledger is found
    * without anyone typing a path. The widget setting still wins when it is
-   * set, for a ledger kept somewhere the editor did not put it.
+   * set, for a ledger kept somewhere the editor did not put it; it is handed to
+   * the reader, which resolves and expands it.
    */
-  readonly property string configuredLedgerPath: Model.expandPath(
-    (settings && settings.ledgerPath) ? settings.ledgerPath : "",
-    Quickshell.env("HOME")
-  )
-  property string discoveredLedgerPath: ""
-  readonly property string ledgerPath: configuredLedgerPath !== ""
-    ? configuredLedgerPath
-    : discoveredLedgerPath
+  readonly property string configuredLedgerPath: (settings && settings.ledgerPath)
+    ? settings.ledgerPath
+    : ""
+  /** Where the reader found the ledger. Shown in the empty state. */
+  property string ledgerPath: ""
   readonly property string appUrl: (settings && settings.appUrl) ? settings.appUrl : "http://127.0.0.1:8080/"
 
   property date today: new Date()
@@ -89,17 +87,20 @@ Panel {
 
   function refresh() {
     root.today = new Date()
-    ledgerFile.reload()
-    if (ledgerFile.loaded) root.ingestText()
+    // Re-running while a read is in flight would only race it.
+    if (!ledgerReader.running) ledgerReader.running = true
   }
 
-  function ingestText() {
-    var next = Model.parseLedger(ledgerFile.text())
-    if (!next) {
+  function ingest(raw) {
+    var out = Model.parseReaderOutput(raw)
+    root.ledgerPath = out.path
+    if (!out.ledger) {
+      // Keep whatever was on screen: a failed read is not news that the
+      // ledger is empty, and the bar should not blank out because of one.
       if (!root.ledger) root.applyLedger()
       return
     }
-    root.ledger = next
+    root.ledger = out.ledger
     root.applyLedger()
   }
 
@@ -141,34 +142,46 @@ Panel {
 
   readonly property color reservedColor: Qt.tint(contentForeground, "#66c4a35a")
 
-  FileView {
-    id: stateFile
-    path: Model.stateFilePath(Quickshell.env("XDG_STATE_HOME"), Quickshell.env("HOME"))
-    preload: true
-    blockLoading: true
-    watchChanges: true
-    printErrors: false
-    onFileChanged: reload()
-    onLoaded: root.discoveredLedgerPath = Model.ledgerPathFromState(stateFile.text())
-  }
-
-  FileView {
-    id: ledgerFile
-    path: root.ledgerPath
-    preload: true
-    blockLoading: true
-    watchChanges: true
-    printErrors: false
-    onFileChanged: reload()
-    onLoaded: root.ingestText()
-    onLoadFailed: {
-      if (!root.ledger) root.applyLedger()
+  /**
+   * The ledger is read by `scripts/omakei-read-ledger.mjs`, not here.
+   *
+   * FileView cannot refuse a symlink, check that what it opened is a regular
+   * file, or stop reading at a size, and it read synchronously while the bar
+   * was starting -- so a large ledger, a FIFO, or a stalled mount hung the
+   * whole bar at login. The reader does that work where the flags for it
+   * exist, using the same bounded read the editor's server uses.
+   *
+   * This runs asynchronously, so the bar paints its empty state first and fills
+   * in a moment later. That is the point: nothing here can block the shell.
+   */
+  Process {
+    id: ledgerReader
+    running: true
+    command: [root.pluginDir + "/scripts/omakei-read-ledger.mjs", root.configuredLedgerPath]
+    stdout: StdioCollector {
+      onStreamFinished: root.ingest(this.text)
     }
   }
 
-  Component.onCompleted: {
-    if (stateFile.loaded) root.discoveredLedgerPath = Model.ledgerPathFromState(stateFile.text())
-    if (ledgerFile.loaded) root.ingestText()
+  // A changed setting points at a different ledger, so read it again.
+  onConfiguredLedgerPathChanged: root.refresh()
+
+  /**
+   * The server rewrites this whenever the ledger changes; the bar re-reads when
+   * it does, so saving in the editor still shows up here without anyone asking.
+   *
+   * `preload: false` and nothing ever calls `text()` or `reload()`, so this
+   * file is watched but never read. That distinction is the whole point: a
+   * watch costs nothing, while reading is what has to be bounded, and the
+   * reader is where bounding happens.
+   */
+  FileView {
+    id: ledgerRevision
+    path: Model.revisionFilePath(Quickshell.env("XDG_STATE_HOME"), Quickshell.env("HOME"))
+    preload: false
+    watchChanges: true
+    printErrors: false
+    onFileChanged: root.refresh()
   }
 
   SystemClock {

@@ -9,6 +9,10 @@ artifacts
 .DS_Store
 *.local
 
+# Isolated dev sandbox: `npm run dev:isolated` keeps its own state file and
+# statements here, so developing never reads or rewrites the real ones.
+.dev/
+
 # Personal financial data — never commit real statements.
 # folio-ledger.json is the name an early build used; still blocked so an old
 # one cannot slip in.
@@ -22,3 +26,10 @@ folio-ledger.json
 Financial_Statements/
 data/statements/
 statements/
+
+# Household-specific words the personal-data scanner blocks. Never committed:
+# the block list would itself be the leak.
+.githooks/personal-terms
+
+# Claude Code's scratch worktrees: whole checkouts of this repo, never committed.
+.claude/worktrees/

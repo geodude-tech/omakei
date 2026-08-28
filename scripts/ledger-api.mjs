@@ -14,15 +14,21 @@
  * No npm dependencies: `omarchy plugin add` clones the git tree and never runs
  * `npm install`.
  */
-import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { constants as FS } from "node:fs";
+import { mkdir, open, readdir, rename, stat, unlink } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
 export const API_PREFIX = "/__omakei";
 export const LEDGER_FILENAME = "omakei-ledger.json";
+/** Rewritten whenever the ledger changes, so the bar widget knows to re-read. */
+export const REVISION_FILENAME = "ledger-revision";
 
-const MAX_LEDGER_BYTES = 20 * 1024 * 1024;
+export const MAX_LEDGER_BYTES = 20 * 1024 * 1024;
 const MAX_STATEMENT_BYTES = 32 * 1024 * 1024;
+/** The state file holds one small JSON object; anything larger is not ours. */
+export const MAX_STATE_BYTES = 64 * 1024;
 
 export const STATEMENT_EXTS = new Set([".csv", ".tsv", ".ofx", ".qfx", ".ofc", ".txt"]);
 
@@ -147,11 +153,82 @@ function readBody(req, limit) {
   });
 }
 
-/** Write through a temp file so a crash mid-write cannot truncate the ledger. */
+/* ------------------------------------------------------------------- disk */
+
+/**
+ * Read a regular file, bounded, without ever following a symlink at the final
+ * path component.
+ *
+ * Everything Omakei reads sits in a directory the user chose, and the paths are
+ * predictable: `omakei-ledger.json`, `state.json`, the statements themselves.
+ * Checking a path and then re-opening it by that path leaves a window where
+ * what was checked and what is read are different files, so the check happens
+ * on the descriptor and the read comes from the same descriptor.
+ *
+ * - `O_NOFOLLOW` refuses a symlink in place of the file.
+ * - `O_NONBLOCK` keeps a FIFO left in the folder from hanging the open, which
+ *   would otherwise stall the server before the regular-file check can run.
+ * - `fstat` on the open descriptor decides the type and size.
+ * - At most `max` bytes are read, so a file that grows after the stat cannot
+ *   grow past the cap either.
+ *
+ * Returns null for anything that is not a readable regular file within `max`.
+ *
+ * The no-follow guarantee covers the last component only. A symlinked *parent*
+ * directory still resolves, which Node cannot prevent without `openat2`.
+ */
+export async function readCapped(path, max) {
+  let fh;
+  try {
+    fh = await open(path, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
+    const info = await fh.stat();
+    if (!info.isFile()) return null;
+    if (info.size > max) return null;
+    const buf = Buffer.alloc(Math.min(info.size, max));
+    let read = 0;
+    while (read < buf.length) {
+      const { bytesRead } = await fh.read(buf, read, buf.length - read, read);
+      if (bytesRead === 0) break;
+      read += bytesRead;
+    }
+    return buf.subarray(0, read);
+  } catch {
+    return null;
+  } finally {
+    await fh?.close().catch(() => {});
+  }
+}
+
+/**
+ * Replace a file atomically, through a temp file nobody can predict or preempt.
+ *
+ * The temp name used to be `<path>.tmp`, which is guessable: anything that got
+ * there first with a symlink would have had this write follow it out of the
+ * folder. Now the name carries random bytes and is created with `O_EXCL`, so an
+ * existing file at that path — symlink or not — fails the open instead of being
+ * written through. It is created in the destination's own directory because
+ * `rename` is only atomic within one filesystem.
+ *
+ * The data is flushed before the rename, so the file the rename publishes is
+ * the whole file rather than whatever reached disk first.
+ */
 async function writeAtomic(path, text) {
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, text, "utf8");
-  await rename(tmp, path);
+  const dir = dirname(path);
+  const tmp = join(dir, `.${basename(path)}.${randomBytes(8).toString("hex")}.tmp`);
+  let fh;
+  try {
+    fh = await open(tmp, FS.O_WRONLY | FS.O_CREAT | FS.O_EXCL | FS.O_NOFOLLOW, 0o600);
+    await fh.writeFile(text, "utf8");
+    await fh.sync();
+    await fh.close();
+    fh = undefined;
+    await rename(tmp, path);
+  } catch (err) {
+    await unlink(tmp).catch(() => {});
+    throw err;
+  } finally {
+    await fh?.close().catch(() => {});
+  }
 }
 
 async function isDirectory(path) {
@@ -199,13 +276,15 @@ async function listStatements(root) {
 export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
   const stateDir = stateDirFor(env, home);
   const statePath = join(stateDir, "state.json");
+  const revisionPath = join(stateDir, REVISION_FILENAME);
   const seedDir = String(env.OMAKEI_STATEMENTS_DIR || "").trim();
 
   let cached;
 
   async function currentDir() {
     if (cached === undefined) {
-      const saved = parseStateFile(await readFile(statePath, "utf8").catch(() => ""));
+      const raw = await readCapped(statePath, MAX_STATE_BYTES);
+      const saved = parseStateFile(raw ? raw.toString("utf8") : "");
       // The env var is a convenience default for development. It seeds the
       // same state every other install writes, so no code path is dev-only.
       cached = saved?.statementsDir || (seedDir ? resolve(expandHome(seedDir, home)) : null);
@@ -218,11 +297,44 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
     cached = dir;
     await mkdir(stateDir, { recursive: true });
     await writeAtomic(statePath, renderStateFile(dir));
+    // Attaching or detaching changes which ledger is the current one, which is
+    // as much a change to the widget as editing the ledger itself.
+    await bumpRevision();
+  }
+
+  /**
+   * Touch the file the bar widget watches.
+   *
+   * The widget cannot watch the ledger: doing that safely means bounding what
+   * it reads, and QML has no way to bound a read. So it watches this instead
+   * and never reads it -- the token is only here to make the file change. The
+   * write is in place rather than through a rename because nothing depends on
+   * it being atomic, and O_NOFOLLOW keeps it consistent with every other write
+   * this module makes.
+   *
+   * A failure here costs a live refresh, not a save, so it is swallowed: the
+   * widget still re-reads when the panel is opened.
+   */
+  async function bumpRevision() {
+    let fh;
+    try {
+      await mkdir(stateDir, { recursive: true });
+      fh = await open(revisionPath, FS.O_WRONLY | FS.O_CREAT | FS.O_TRUNC | FS.O_NOFOLLOW, 0o600);
+      await fh.writeFile(`${Date.now()}\n`, "utf8");
+    } catch {
+      /* nothing the user can do about it, and nothing that should fail a save */
+    } finally {
+      await fh?.close().catch(() => {});
+    }
   }
 
   async function readLedger(dir) {
+    // A ledger larger than the cap is refused on the way in as well as on the
+    // way out: this runs on every /state call, into a long-lived server.
+    const raw = await readCapped(join(dir, LEDGER_FILENAME), MAX_LEDGER_BYTES);
+    if (!raw) return null;
     try {
-      const parsed = JSON.parse(await readFile(join(dir, LEDGER_FILENAME), "utf8"));
+      const parsed = JSON.parse(raw.toString("utf8"));
       return isLedgerPayload(parsed) ? parsed : null;
     } catch {
       return null;
@@ -337,16 +449,20 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
           deny(res, 400, "Not a statement file in the attached folder");
           return true;
         }
-        const info = await stat(abs).catch(() => null);
-        if (!info?.isFile()) {
+        // One open decides the type, the size, and the bytes. Statements are
+        // listed with readdir's own type info, which already skips symlinks, so
+        // refusing to follow one here changes nothing a user could reach.
+        const raw = await readCapped(abs, MAX_STATEMENT_BYTES);
+        if (!raw) {
+          const info = await stat(abs).catch(() => null);
+          if (info?.isFile() && info.size > MAX_STATEMENT_BYTES) {
+            deny(res, 413, "That statement file is too large to read");
+            return true;
+          }
           deny(res, 404, "No such file");
           return true;
         }
-        if (info.size > MAX_STATEMENT_BYTES) {
-          deny(res, 413, "That statement file is too large to read");
-          return true;
-        }
-        json(res, 200, { path: rel, text: await readFile(abs, "utf8") });
+        json(res, 200, { path: rel, text: raw.toString("utf8") });
         return true;
       }
 
@@ -378,6 +494,7 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
           return true;
         }
         await writeAtomic(join(dir, LEDGER_FILENAME), `${JSON.stringify(parsed)}\n`);
+        await bumpRevision();
         json(res, 200, { ok: true });
         return true;
       }
@@ -392,5 +509,5 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
     }
   }
 
-  return { handle, statePath, stateBody };
+  return { handle, statePath, revisionPath, stateBody };
 }

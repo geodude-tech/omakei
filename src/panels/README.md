@@ -83,9 +83,15 @@ it — see `summaries.ts` and `summaries.test.ts` for the pattern.
 ## After adding a panel
 
 ```sh
-npm run build     # dist/ is committed, so this is required
+git add src/panels/your-panel.tsx   # before the build, not after
+npm run build                       # dist/ is committed, so this is required
 npm test
 ```
+
+The `git add` comes first on purpose. `dist/.build-hash` is computed from the
+files git is **tracking**, so a build run while the new panel is still untracked
+stamps a hash that does not include it, and the pre-commit hook rejects the
+commit. Adding the file first makes the stamp and the commit agree.
 
 `npm run dev` picks up new panels without a build, but an installed plugin reads
 the committed `dist/`, and the pre-commit hook rejects a stale one.

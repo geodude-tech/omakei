@@ -8,7 +8,9 @@ import tseslint from "typescript-eslint";
 /** Flat ESLint config for the Omakei ledger editor. */
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**"],
+    // `.claude/worktrees/` holds whole checkouts of this repo, so linting it
+    // reports every problem a second time, against files nobody is editing.
+    ignores: ["dist/**", "node_modules/**", ".claude/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

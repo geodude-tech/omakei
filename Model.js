@@ -25,28 +25,18 @@ var MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December"
 ]
 
-function stateFilePath(xdgStateHome, home) {
+/**
+ * The file the server rewrites whenever the ledger changes.
+ *
+ * The widget watches this and nothing else. It never reads it -- the token
+ * inside is meaningless -- it only needs to be told that something happened, at
+ * which point it runs the reader. Watching the ledger itself is what used to
+ * pull an unbounded file into the bar.
+ */
+function revisionFilePath(xdgStateHome, home) {
   var base = String(xdgStateHome || "")
   if (!base) base = String(home || "") + "/.local/state"
-  return base + "/omakei/state.json"
-}
-
-/**
- * Read the ledger's location out of the server's state file, so attaching a
- * folder in the editor is all anyone has to do.
- */
-function ledgerPathFromState(raw) {
-  try {
-    var data = JSON.parse(String(raw || ""))
-    if (!data || data.version !== 1) return ""
-    if (typeof data.ledgerPath === "string" && data.ledgerPath) return data.ledgerPath
-    if (typeof data.statementsDir === "string" && data.statementsDir) {
-      return String(data.statementsDir).replace(/\/$/, "") + "/omakei-ledger.json"
-    }
-    return ""
-  } catch (e) {
-    return ""
-  }
+  return base + "/omakei/ledger-revision"
 }
 
 function expandPath(path, home) {
@@ -164,23 +154,48 @@ function setAsideTotal(setAsides) {
   return Math.round(total * 100) / 100
 }
 
+function normalizeLedger(data) {
+  if (!data || data.version !== 1 || !Array.isArray(data.transactions)) return null
+  var transactions = []
+  for (var i = 0; i < data.transactions.length; i++) {
+    var tx = data.transactions[i]
+    if (!tx || typeof tx.date !== "string" || typeof tx.amount !== "number") continue
+    transactions.push(tx)
+  }
+  return {
+    selectedMonth: typeof data.selectedMonth === "string" ? data.selectedMonth : "",
+    transactions: transactions,
+    setAsides: parseSetAsides(data.setAsides)
+  }
+}
+
 function parseLedger(raw) {
   try {
-    var data = JSON.parse(String(raw || ""))
-    if (!data || data.version !== 1 || !Array.isArray(data.transactions)) return null
-    var transactions = []
-    for (var i = 0; i < data.transactions.length; i++) {
-      var tx = data.transactions[i]
-      if (!tx || typeof tx.date !== "string" || typeof tx.amount !== "number") continue
-      transactions.push(tx)
-    }
-    return {
-      selectedMonth: typeof data.selectedMonth === "string" ? data.selectedMonth : "",
-      transactions: transactions,
-      setAsides: parseSetAsides(data.setAsides)
-    }
+    return normalizeLedger(JSON.parse(String(raw || "")))
   } catch (e) {
     return null
+  }
+}
+
+/**
+ * Read what `scripts/omakei-read-ledger.mjs` prints: the resolved path and the
+ * ledger found there, either of which may be empty. The panel shows the path in
+ * its empty state, so it is wanted even when the ledger is null.
+ *
+ * The reader is trusted to emit JSON and nothing else, but a crashed or
+ * half-written pipe still has to land somewhere sane rather than throwing
+ * inside a signal handler.
+ */
+function parseReaderOutput(raw) {
+  try {
+    var payload = JSON.parse(String(raw || ""))
+    if (!payload || typeof payload !== "object") return { path: "", ledger: null }
+    return {
+      path: typeof payload.path === "string" ? payload.path : "",
+      ledger: normalizeLedger(payload.ledger)
+    }
+  } catch (e) {
+    return { path: "", ledger: null }
   }
 }
 
