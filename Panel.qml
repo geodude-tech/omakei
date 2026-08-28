@@ -166,6 +166,24 @@ Panel {
   // A changed setting points at a different ledger, so read it again.
   onConfiguredLedgerPathChanged: root.refresh()
 
+  /**
+   * The server rewrites this whenever the ledger changes; the bar re-reads when
+   * it does, so saving in the editor still shows up here without anyone asking.
+   *
+   * `preload: false` and nothing ever calls `text()` or `reload()`, so this
+   * file is watched but never read. That distinction is the whole point: a
+   * watch costs nothing, while reading is what has to be bounded, and the
+   * reader is where bounding happens.
+   */
+  FileView {
+    id: ledgerRevision
+    path: Model.revisionFilePath(Quickshell.env("XDG_STATE_HOME"), Quickshell.env("HOME"))
+    preload: false
+    watchChanges: true
+    printErrors: false
+    onFileChanged: root.refresh()
+  }
+
   SystemClock {
     id: clock
     precision: SystemClock.Minutes

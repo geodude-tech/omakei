@@ -14,7 +14,11 @@ The editor is a static SPA served by `scripts/omakei-serve.mjs`. `dist/` is comm
 
 Both the Vite dev server and `omakei-serve.mjs` mount that same handler, so development and an installed plugin run identical disk code. Anything that only one of them can do is a bug: that split is what let an earlier version ship a data path nobody exercised by hand.
 
-Because the server knows the folder's real path, it records it in `~/.local/state/omakei/state.json`, and `Panel.qml` reads the ledger from there. That file's shape is part of the plugin contract. Nobody should have to type a ledger path into widget settings; the `ledgerPath` setting exists only to override the recorded one.
+Because the server knows the folder's real path, it records it in `~/.local/state/omakei/state.json`. That file's shape is part of the plugin contract. Nobody should have to type a ledger path into widget settings; the `ledgerPath` setting exists only to override the recorded one.
+
+**The widget does not read files.** `Panel.qml` used to open the state file and the ledger through QML `FileView`s, which is a second path onto disk and cannot refuse a symlink, check that it opened a regular file, or stop reading at a size. Worse, `BarWidget.qml` loads the panel eagerly and those reads blocked, so an oversized ledger or a stalled mount hung the whole Omarchy bar at login. The panel now runs `scripts/omakei-read-ledger.mjs` in a `Process` and parses what it prints. Keep it that way: if the widget needs something else off disk, extend the reader rather than adding a `FileView`.
+
+The one file the widget still watches is `~/.local/state/omakei/ledger-revision`, which the server rewrites whenever the ledger changes or a folder is attached. It is watched with `preload: false` and is never read — `text()` and `reload()` are never called on it — so it costs a change notification and nothing else. That is what keeps the bar live without pulling an unbounded file into the shell.
 
 ## Reading the ledger
 

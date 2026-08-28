@@ -459,6 +459,74 @@ test("no temp file is left behind by a successful write", async () => {
   }
 });
 
+test("the revision file changes whenever the widget would need to re-read", async () => {
+  const { home, statements } = tempTree();
+  const s = await serve(home);
+  try {
+    // Attaching is itself a change: it decides which ledger is current.
+    await s.call("/folder", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: statements }),
+    });
+    const afterAttach = readFileSync(s.api.revisionPath, "utf8");
+    assert.match(afterAttach, /^\d+\n$/, "the token is only there to make the file change");
+
+    await new Promise((r) => setTimeout(r, 2));
+    await s.call("/ledger", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 1, transactions: [], rules: [], selectedMonth: "2026-08" }),
+    });
+    const afterSave = readFileSync(s.api.revisionPath, "utf8");
+    assert.notEqual(afterSave, afterAttach, "saving the ledger has to move it");
+
+    await new Promise((r) => setTimeout(r, 2));
+    await s.call("/folder", { method: "DELETE" });
+    assert.notEqual(readFileSync(s.api.revisionPath, "utf8"), afterSave, "so does detaching");
+  } finally {
+    await s.close();
+  }
+});
+
+test("a rejected ledger does not move the revision", async () => {
+  const { home, statements } = tempTree();
+  const s = await attached(home, statements);
+  try {
+    const before = readFileSync(s.api.revisionPath, "utf8");
+    await new Promise((r) => setTimeout(r, 2));
+    const bad = await s.call("/ledger", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 9, nope: true }),
+    });
+    assert.equal(bad.status, 400);
+    assert.equal(readFileSync(s.api.revisionPath, "utf8"), before, "nothing changed, so nothing to re-read");
+  } finally {
+    await s.close();
+  }
+});
+
+test("a symlinked revision file is not written through", async () => {
+  const { root, home, statements } = tempTree();
+  const canary = join(root, "canary.txt");
+  writeFileSync(canary, "untouched");
+  const s = await serve(home);
+  try {
+    mkdirSync(join(home, ".state", "omakei"), { recursive: true });
+    symlinkSync(canary, join(home, ".state", "omakei", "ledger-revision"));
+    const put = await s.call("/folder", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: statements }),
+    });
+    assert.equal(put.status, 200, "a hostile revision file must not break attaching");
+    assert.equal(readFileSync(canary, "utf8"), "untouched");
+  } finally {
+    await s.close();
+  }
+});
+
 test("path and header helpers", () => {
   assert.equal(safeJoin("/root", "a/b.csv"), "/root/a/b.csv");
   assert.equal(safeJoin("/root", "../escape.csv"), null);

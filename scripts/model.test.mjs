@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = readFileSync(join(ROOT, "Model.js"), "utf8");
 const Model = new Function(
-  `${src}\nreturn { editorUrl, editorQuery, emptySummary, summarize, parseSetAsides, openEditorCommand, shellQuote, stateFilePath, ledgerPathFromState, parseLedger, parseReaderOutput };`,
+  `${src}\nreturn { editorUrl, editorQuery, emptySummary, summarize, parseSetAsides, openEditorCommand, shellQuote, revisionFilePath, parseLedger, parseReaderOutput };`,
 )();
 
 test("editorUrl carries the month the popup was showing", () => {
@@ -89,34 +89,18 @@ test("summarize totals a month of transactions", () => {
   assert.equal(Model.editorQuery(summary), "m=2026-08");
 });
 
-test("the widget finds the ledger from the server's state file", () => {
+test("the widget watches the server's revision file, wherever state lives", () => {
   assert.equal(
-    Model.stateFilePath("/run/state", "/home/user"),
-    "/run/state/omakei/state.json",
+    Model.revisionFilePath("/run/state", "/home/user"),
+    "/run/state/omakei/ledger-revision",
+    "XDG_STATE_HOME wins when it is set",
   );
   assert.equal(
-    Model.stateFilePath("", "/home/user"),
-    "/home/user/.local/state/omakei/state.json",
+    Model.revisionFilePath("", "/home/user"),
+    "/home/user/.local/state/omakei/ledger-revision",
+    "and falls back to the default state directory",
   );
-
-  assert.equal(
-    Model.ledgerPathFromState(
-      JSON.stringify({ version: 1, statementsDir: "/s", ledgerPath: "/s/omakei-ledger.json" }),
-    ),
-    "/s/omakei-ledger.json",
-  );
-  // Derived from the folder when only the folder is recorded.
-  assert.equal(
-    Model.ledgerPathFromState(JSON.stringify({ version: 1, statementsDir: "/s/" })),
-    "/s/omakei-ledger.json",
-  );
-  // No folder attached, unknown version, or unreadable file: no path.
-  assert.equal(Model.ledgerPathFromState(JSON.stringify({ version: 1, statementsDir: "" })), "");
-  assert.equal(Model.ledgerPathFromState(JSON.stringify({ version: 2, ledgerPath: "/x" })), "");
-  assert.equal(Model.ledgerPathFromState("not json"), "");
-  assert.equal(Model.ledgerPathFromState(""), "");
 });
-
 test("parseReaderOutput takes the reader's path and ledger apart", () => {
   const ledger = {
     version: 1,

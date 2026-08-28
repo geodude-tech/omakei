@@ -25,28 +25,18 @@ var MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December"
 ]
 
-function stateFilePath(xdgStateHome, home) {
+/**
+ * The file the server rewrites whenever the ledger changes.
+ *
+ * The widget watches this and nothing else. It never reads it -- the token
+ * inside is meaningless -- it only needs to be told that something happened, at
+ * which point it runs the reader. Watching the ledger itself is what used to
+ * pull an unbounded file into the bar.
+ */
+function revisionFilePath(xdgStateHome, home) {
   var base = String(xdgStateHome || "")
   if (!base) base = String(home || "") + "/.local/state"
-  return base + "/omakei/state.json"
-}
-
-/**
- * Read the ledger's location out of the server's state file, so attaching a
- * folder in the editor is all anyone has to do.
- */
-function ledgerPathFromState(raw) {
-  try {
-    var data = JSON.parse(String(raw || ""))
-    if (!data || data.version !== 1) return ""
-    if (typeof data.ledgerPath === "string" && data.ledgerPath) return data.ledgerPath
-    if (typeof data.statementsDir === "string" && data.statementsDir) {
-      return String(data.statementsDir).replace(/\/$/, "") + "/omakei-ledger.json"
-    }
-    return ""
-  } catch (e) {
-    return ""
-  }
+  return base + "/omakei/ledger-revision"
 }
 
 function expandPath(path, home) {

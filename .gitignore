@@ -26,3 +26,6 @@ statements/
 # Household-specific words the personal-data scanner blocks. Never committed:
 # the block list would itself be the leak.
 .githooks/personal-terms
+
+# Claude Code's scratch worktrees: whole checkouts of this repo, never committed.
+.claude/worktrees/

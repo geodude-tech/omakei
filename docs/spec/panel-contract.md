@@ -39,14 +39,16 @@ Dev:       npm run dev            # 127.0.0.1:8080
 ## Project Structure
 
 ```
-src/panels/               → one file per panel, auto-discovered
-src/panels/README.md      → the contract, written for an agent to read
-src/panels/registry.ts    → import.meta.glob discovery + ordering (core, not a panel)
-src/panels/panel-frame.tsx→ Card wrapper + per-panel error boundary (core)
-src/lib/finance/types.ts  → PanelProps, PanelMeta live here beside Transaction
+src/panels/                 → one file per panel, auto-discovered
+src/panels/README.md        → the contract, written for an agent to read
+src/lib/panels/registry.ts  → import.meta.glob discovery + ordering (core, not a panel)
+src/lib/panels/panel-frame.tsx → Card wrapper + per-panel error boundary (core)
+src/lib/panels/panel-grid.tsx  → the five-column grid, and the pre-`ready` placeholders
+src/lib/panels/span.ts      → span number → grid class
+src/lib/finance/types.ts    → PanelProps, PanelMeta live here beside Transaction
 ```
 
-No registry file lists the panels. `registry.ts` discovers them:
+No registry file lists the panels. `src/lib/panels/registry.ts` discovers them:
 
 ```ts
 const modules = import.meta.glob<PanelModule>("./*.tsx", { eager: true });

@@ -22,6 +22,8 @@ import { basename, dirname, extname, join, relative, resolve, sep } from "node:p
 
 export const API_PREFIX = "/__omakei";
 export const LEDGER_FILENAME = "omakei-ledger.json";
+/** Rewritten whenever the ledger changes, so the bar widget knows to re-read. */
+export const REVISION_FILENAME = "ledger-revision";
 
 export const MAX_LEDGER_BYTES = 20 * 1024 * 1024;
 const MAX_STATEMENT_BYTES = 32 * 1024 * 1024;
@@ -274,6 +276,7 @@ async function listStatements(root) {
 export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
   const stateDir = stateDirFor(env, home);
   const statePath = join(stateDir, "state.json");
+  const revisionPath = join(stateDir, REVISION_FILENAME);
   const seedDir = String(env.OMAKEI_STATEMENTS_DIR || "").trim();
 
   let cached;
@@ -294,6 +297,35 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
     cached = dir;
     await mkdir(stateDir, { recursive: true });
     await writeAtomic(statePath, renderStateFile(dir));
+    // Attaching or detaching changes which ledger is the current one, which is
+    // as much a change to the widget as editing the ledger itself.
+    await bumpRevision();
+  }
+
+  /**
+   * Touch the file the bar widget watches.
+   *
+   * The widget cannot watch the ledger: doing that safely means bounding what
+   * it reads, and QML has no way to bound a read. So it watches this instead
+   * and never reads it -- the token is only here to make the file change. The
+   * write is in place rather than through a rename because nothing depends on
+   * it being atomic, and O_NOFOLLOW keeps it consistent with every other write
+   * this module makes.
+   *
+   * A failure here costs a live refresh, not a save, so it is swallowed: the
+   * widget still re-reads when the panel is opened.
+   */
+  async function bumpRevision() {
+    let fh;
+    try {
+      await mkdir(stateDir, { recursive: true });
+      fh = await open(revisionPath, FS.O_WRONLY | FS.O_CREAT | FS.O_TRUNC | FS.O_NOFOLLOW, 0o600);
+      await fh.writeFile(`${Date.now()}\n`, "utf8");
+    } catch {
+      /* nothing the user can do about it, and nothing that should fail a save */
+    } finally {
+      await fh?.close().catch(() => {});
+    }
   }
 
   async function readLedger(dir) {
@@ -462,6 +494,7 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
           return true;
         }
         await writeAtomic(join(dir, LEDGER_FILENAME), `${JSON.stringify(parsed)}\n`);
+        await bumpRevision();
         json(res, 200, { ok: true });
         return true;
       }
@@ -476,5 +509,5 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
     }
   }
 
-  return { handle, statePath, stateBody };
+  return { handle, statePath, revisionPath, stateBody };
 }
