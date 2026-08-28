@@ -23,10 +23,10 @@ import { basename, dirname, extname, join, relative, resolve, sep } from "node:p
 export const API_PREFIX = "/__omakei";
 export const LEDGER_FILENAME = "omakei-ledger.json";
 
-const MAX_LEDGER_BYTES = 20 * 1024 * 1024;
+export const MAX_LEDGER_BYTES = 20 * 1024 * 1024;
 const MAX_STATEMENT_BYTES = 32 * 1024 * 1024;
 /** The state file holds one small JSON object; anything larger is not ours. */
-const MAX_STATE_BYTES = 64 * 1024;
+export const MAX_STATE_BYTES = 64 * 1024;
 
 export const STATEMENT_EXTS = new Set([".csv", ".tsv", ".ofx", ".qfx", ".ofc", ".txt"]);
 
@@ -175,7 +175,7 @@ function readBody(req, limit) {
  * The no-follow guarantee covers the last component only. A symlinked *parent*
  * directory still resolves, which Node cannot prevent without `openat2`.
  */
-async function readCapped(path, max) {
+export async function readCapped(path, max) {
   let fh;
   try {
     fh = await open(path, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
