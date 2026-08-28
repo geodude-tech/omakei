@@ -39,14 +39,15 @@ const LEDGER = { version: 1, transactions: [{ id: "a", date: "2026-08-02", amoun
 test("the ledger the state file points at is returned", async () => {
   const { home, statements } = attachedHome();
   writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify(LEDGER));
-  const ledger = await readLedgerForWidget("", envFor(home));
+  const { ledger, path } = await readLedgerForWidget("", envFor(home));
   assert.equal(ledger.transactions.length, 1);
+  assert.equal(path, join(statements, "omakei-ledger.json"));
 });
 
 test("nothing attached reads as null rather than an error", async () => {
   const root = mkdtempSync(join(tmpdir(), "omakei-widget-"));
   temps.push(root);
-  assert.equal(await readLedgerForWidget("", envFor(root)), null);
+  assert.deepEqual(await readLedgerForWidget("", envFor(root)), { path: "", ledger: null });
 });
 
 test("a symlinked ledger is refused", async () => {
@@ -54,7 +55,7 @@ test("a symlinked ledger is refused", async () => {
   const outside = join(root, "elsewhere.json");
   writeFileSync(outside, JSON.stringify(LEDGER));
   symlinkSync(outside, join(statements, "omakei-ledger.json"));
-  assert.equal(await readLedgerForWidget("", envFor(home)), null);
+  assert.equal((await readLedgerForWidget("", envFor(home))).ledger, null);
 });
 
 test("a symlinked state file is refused", async () => {
@@ -65,7 +66,7 @@ test("a symlinked state file is refused", async () => {
   const statePath = join(home, ".local", "state", "omakei", "state.json");
   rmSync(statePath);
   symlinkSync(decoy, statePath);
-  assert.equal(await readLedgerForWidget("", envFor(home)), null);
+  assert.equal((await readLedgerForWidget("", envFor(home))).ledger, null);
 });
 
 test("a ledger over the cap never reaches the widget", async () => {
@@ -80,7 +81,7 @@ test("a ledger over the cap never reaches the widget", async () => {
       transactions: [{ id: "a", note: "x".repeat(21 * 1024 * 1024) }],
     }),
   );
-  assert.equal(await readLedgerForWidget("", envFor(home)), null);
+  assert.equal((await readLedgerForWidget("", envFor(home))).ledger, null);
 });
 
 test("a FIFO in the ledger's place does not hang the read", async () => {
@@ -91,7 +92,7 @@ test("a FIFO in the ledger's place does not hang the read", async () => {
   } catch {
     return; // no mkfifo here; nothing to assert
   }
-  const ledger = await Promise.race([
+  const { ledger } = await Promise.race([
     readLedgerForWidget("", envFor(home)),
     new Promise((_, reject) => setTimeout(() => reject(new Error("read blocked")), 4000)),
   ]);
@@ -101,9 +102,9 @@ test("a FIFO in the ledger's place does not hang the read", async () => {
 test("a ledger that is not a ledger is refused", async () => {
   const { home, statements } = attachedHome();
   writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify({ version: 9, nope: true }));
-  assert.equal(await readLedgerForWidget("", envFor(home)), null);
+  assert.equal((await readLedgerForWidget("", envFor(home))).ledger, null);
   writeFileSync(join(statements, "omakei-ledger.json"), "not json at all");
-  assert.equal(await readLedgerForWidget("", envFor(home)), null);
+  assert.equal((await readLedgerForWidget("", envFor(home))).ledger, null);
 });
 
 test("the override wins over the state file, and ~ expands", async () => {
@@ -112,9 +113,9 @@ test("the override wins over the state file, and ~ expands", async () => {
   const other = { version: 1, rules: [], transactions: [{ id: "b" }, { id: "c" }] };
   writeFileSync(join(home, "other.json"), JSON.stringify(other));
   const byAbsolute = await readLedgerForWidget(join(home, "other.json"), envFor(home));
-  assert.equal(byAbsolute.transactions.length, 2);
+  assert.equal(byAbsolute.ledger.transactions.length, 2);
   const byTilde = await readLedgerForWidget("~/other.json", envFor(home));
-  assert.equal(byTilde.transactions.length, 2);
+  assert.equal(byTilde.ledger.transactions.length, 2);
 });
 
 test("the CLI prints JSON and exits cleanly with nothing attached", () => {
@@ -124,5 +125,5 @@ test("the CLI prints JSON and exits cleanly with nothing attached", () => {
     encoding: "utf8",
     env: { ...process.env, HOME: root, XDG_STATE_HOME: join(root, "state") },
   });
-  assert.equal(out, "null", "the widget must always receive parseable JSON");
+  assert.deepEqual(JSON.parse(out), { path: "", ledger: null }, "the widget must always receive parseable JSON");
 });

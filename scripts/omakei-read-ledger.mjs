@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 /**
- * Print the ledger the widget should show, as JSON on stdout, or `null`.
+ * Print what the widget should show, as one JSON object on stdout:
+ *
+ *   {"path": "/where/it/was/found", "ledger": {...} | null}
+ *
+ * The path comes back because the panel shows it as a hint when there is no
+ * data, and only this side knows where the ledger was actually resolved from.
  *
  * The bar widget used to read the state file and the ledger itself, through
  * QML's `FileView`. That was a second code path onto disk — the one thing
@@ -50,19 +55,21 @@ async function resolveLedgerPath(override, env, home) {
  *  that cannot move them ends up reading the real one. */
 export async function readLedgerForWidget(override = "", { env = process.env, home = homedir() } = {}) {
   const path = await resolveLedgerPath(override, env, home);
-  if (!path) return null;
+  if (!path) return { path: "", ledger: null };
   const raw = await readCapped(path, MAX_LEDGER_BYTES);
-  if (!raw) return null;
+  // The path is reported even when the read fails: "there should be a ledger
+  // here and there is not" is exactly what the panel's empty state says.
+  if (!raw) return { path, ledger: null };
   try {
     const parsed = JSON.parse(raw.toString("utf8"));
-    return isLedgerPayload(parsed) ? parsed : null;
+    return { path, ledger: isLedgerPayload(parsed) ? parsed : null };
   } catch {
-    return null;
+    return { path, ledger: null };
   }
 }
 
 if (process.argv[1]?.endsWith("omakei-read-ledger.mjs")) {
   readLedgerForWidget(process.argv[2] ?? "")
-    .then((ledger) => process.stdout.write(JSON.stringify(ledger)))
-    .catch(() => process.stdout.write("null"));
+    .then((out) => process.stdout.write(JSON.stringify(out)))
+    .catch(() => process.stdout.write('{"path":"","ledger":null}'));
 }
