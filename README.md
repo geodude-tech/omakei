@@ -4,6 +4,8 @@ This month’s leftover on the [Omarchy](https://omarchy.org/) bar: spend, incom
 
 You start with a folder of bank, credit, or mortgage exports. Omakei builds the ledger in that folder. Nothing is uploaded. The files never leave this computer.
 
+The pill is the part you see every day. The ledger underneath it is a plain file you can ask questions of — see [Asking your own questions](#asking-your-own-questions).
+
 ## Install
 
 ```sh
@@ -47,6 +49,24 @@ Known merchants are categorized automatically. A transaction with an unknown cat
 - Middle click: reload the ledger
 
 In the popup: `[` / `]` change month, `t` jumps to this month, `o` opens Omakei, Escape closes.
+
+## Asking your own questions
+
+Omakei has no AI in it, and never will. What it has is one clean file.
+
+Every statement you drop in the folder ends up in `omakei-ledger.json` next to them: one flat list of transactions with dates, amounts, descriptions, accounts, and categories. Point an agent that can read local files — Claude Code, or any harness you already use — at that file and ask the things a spending app never answers well:
+
+- Am I spending more than I make, over the last six months rather than this one?
+- Which categories are drifting up, and since when?
+- What did I spend on restaurants this month compared to my average?
+
+That is the whole idea. The dashboard shows the answers you got tired of asking for.
+
+### Pinning an answer
+
+Each card on the dashboard is one file in `src/panels/`. If an answer is worth seeing every day, an agent can write a panel for it: a small component that reads the ledger and renders a number, a chart, or a single sentence. A panel that has nothing to say renders nothing, so a card only appears in the months it matters.
+
+This needs a clone of the repository rather than a plugin install, because panels are compiled into the bundle. See [`src/panels/README.md`](src/panels/README.md) for the contract, and `npm run build` after adding one.
 
 ## Your data
 
