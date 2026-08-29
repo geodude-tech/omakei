@@ -5,12 +5,45 @@
  * anything worth a test lives here in plain TypeScript instead.
  */
 import { CATEGORY_BY_ID } from "./categories.ts";
-import { isSpend } from "./ledger.ts";
-import type { Transaction } from "./types.ts";
+import { isIncome, isSpend } from "./ledger.ts";
+import { availableNet, setAsideTotal } from "./set-asides.ts";
+import type { SetAside, Transaction } from "./types.ts";
 import { formatDay, monthKey } from "../utils.ts";
 
 export type CategoryTotal = { id: string; name: string; total: number };
 export type DailySpend = { day: string; spent: number; label: string };
+export type MonthSummary = {
+  spent: number;
+  income: number;
+  cashflow: number;
+  allocated: number;
+  net: number;
+  uncategorized: number;
+};
+
+/**
+ * The four numbers on the stat row: total spend and income for the month, the
+ * cashflow between them, and what is left after the month's set-asides.
+ */
+export function monthSummary(rows: Transaction[], setAsides: SetAside[]): MonthSummary {
+  let spent = 0;
+  let income = 0;
+  let uncategorized = 0;
+  for (const tx of rows) {
+    if (isSpend(tx)) spent += Math.abs(tx.amount);
+    if (isIncome(tx)) income += tx.amount;
+    if (!tx.categoryId) uncategorized += 1;
+  }
+  const cashflow = income - spent;
+  return {
+    spent,
+    income,
+    cashflow,
+    allocated: setAsideTotal(setAsides),
+    net: availableNet(cashflow, setAsides),
+    uncategorized,
+  };
+}
 
 /** Spend per category, largest first. Income and transfers are excluded. */
 export function categoryTotals(rows: Transaction[]): CategoryTotal[] {

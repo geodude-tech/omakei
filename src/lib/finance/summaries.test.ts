@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { categoryTotals, dailySpend } from "./summaries.ts";
+import { categoryTotals, dailySpend, monthSummary } from "./summaries.ts";
 import type { Transaction } from "./types.ts";
 
 function tx(
-  partial: Partial<Transaction> &
-    Pick<Transaction, "id" | "date" | "description" | "amount">,
+  partial: Partial<Transaction> & Pick<Transaction, "id" | "date" | "description" | "amount">,
 ): Transaction {
   return {
     accountName: "checking",
@@ -20,8 +19,20 @@ function tx(
 
 test("categoryTotals sums spend per category, largest first", () => {
   const rows = [
-    tx({ id: "1", date: "2026-03-02", description: "Trader Joe's", amount: -40, categoryId: "groceries" }),
-    tx({ id: "2", date: "2026-03-05", description: "Trader Joe's", amount: -60, categoryId: "groceries" }),
+    tx({
+      id: "1",
+      date: "2026-03-02",
+      description: "Trader Joe's",
+      amount: -40,
+      categoryId: "groceries",
+    }),
+    tx({
+      id: "2",
+      date: "2026-03-05",
+      description: "Trader Joe's",
+      amount: -60,
+      categoryId: "groceries",
+    }),
     tx({ id: "3", date: "2026-03-06", description: "Shell", amount: -25, categoryId: "transport" }),
   ];
   assert.deepEqual(categoryTotals(rows), [
@@ -36,6 +47,46 @@ test("categoryTotals ignores income and files uncategorized spend under Other", 
     tx({ id: "2", date: "2026-03-04", description: "Unknown Shop", amount: -30 }),
   ];
   assert.deepEqual(categoryTotals(rows), [{ id: "other", name: "Other", total: 30 }]);
+});
+
+test("monthSummary totals spend and income and nets out set-asides", () => {
+  const rows = [
+    tx({ id: "1", date: "2026-03-01", description: "Payroll", amount: 3000, categoryId: "income" }),
+    tx({
+      id: "2",
+      date: "2026-03-04",
+      description: "Trader Joe's",
+      amount: -120,
+      categoryId: "groceries",
+    }),
+    tx({ id: "3", date: "2026-03-06", description: "Unknown Shop", amount: -30 }),
+    tx({
+      id: "4",
+      date: "2026-03-08",
+      description: "Move to savings",
+      amount: -500,
+      categoryId: "transfers",
+    }),
+  ];
+  const setAsides = [{ id: "t", name: "Taxes", amount: 400 }];
+  const s = monthSummary(rows, setAsides);
+  assert.equal(s.spent, 150, "transfers are neither spend nor income");
+  assert.equal(s.income, 3000);
+  assert.equal(s.cashflow, 2850);
+  assert.equal(s.allocated, 400);
+  assert.equal(s.net, 2450, "cashflow minus the month's set-asides");
+  assert.equal(s.uncategorized, 1, "only the row with no categoryId counts");
+});
+
+test("monthSummary is all zeros for an empty month", () => {
+  assert.deepEqual(monthSummary([], []), {
+    spent: 0,
+    income: 0,
+    cashflow: 0,
+    allocated: 0,
+    net: 0,
+    uncategorized: 0,
+  });
 });
 
 test("dailySpend covers every day of the month, including empty ones", () => {

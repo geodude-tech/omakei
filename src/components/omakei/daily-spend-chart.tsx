@@ -6,6 +6,7 @@
  * than the rest of the editor combined.
  */
 import { useState } from "react";
+import { barHeightPercent } from "@/lib/chart.ts";
 import type { DailySpend } from "@/lib/finance/summaries.ts";
 import { formatMoney } from "@/lib/utils.ts";
 
@@ -39,9 +40,7 @@ export default function DailySpendChart({ data }: { data: DailySpend[] }) {
           aria-hidden="true"
         >
           {data.map((d, i) => {
-            // A zero-spend day still gets a hairline, so the axis reads as a row
-            // of days rather than gaps.
-            const height = max > 0 ? Math.max((d.spent / max) * 100, d.spent > 0 ? 1.5 : 0.5) : 0.5;
+            const height = barHeightPercent(d.spent, max);
             return (
               <rect
                 key={d.day}
@@ -50,9 +49,7 @@ export default function DailySpendChart({ data }: { data: DailySpend[] }) {
                 width={barWidth}
                 height={height}
                 rx={0.6}
-                fill={
-                  hover === i ? "var(--color-foreground)" : "var(--color-chart-1)"
-                }
+                fill={hover === i ? "var(--color-foreground)" : "var(--color-chart-1)"}
                 opacity={hover === null || hover === i ? 1 : 0.45}
                 onPointerEnter={() => setHover(i)}
               />

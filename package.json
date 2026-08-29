@@ -9,7 +9,7 @@
     "build": "vite build && node scripts/stamp-build.mjs",
     "start": "node scripts/omakei-serve.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/finance/*.test.ts && node scripts/check-no-statements.mjs && node scripts/check-no-personal-data.mjs && node scripts/check-panels.mjs && node scripts/check-plugin.mjs",
+    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test 'src/lib/**/*.test.ts' && node scripts/check-no-statements.mjs && node scripts/check-no-personal-data.mjs && node scripts/check-panels.mjs && node scripts/check-plugin.mjs",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

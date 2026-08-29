@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { parseMoneyInput } from "@/lib/finance/set-asides";
 import type { SetAside } from "@/lib/finance/types";
+import { useFlushOnHide } from "@/lib/use-flush-on-hide";
 import { cn, formatMoney } from "@/lib/utils";
 
 export function SetAsideStat({
@@ -21,16 +22,6 @@ export function SetAsideStat({
   const amountRef = useRef<HTMLInputElement>(null);
   const [editingAmount, setEditingAmount] = useState(false);
   const [amountDraft, setAmountDraft] = useState("");
-  const editingAmountRef = useRef(false);
-  const amountDraftRef = useRef("");
-  const itemAmountRef = useRef(item.amount);
-  const onChangeRef = useRef(onChange);
-  const onCommitRef = useRef(onCommit);
-  editingAmountRef.current = editingAmount;
-  amountDraftRef.current = amountDraft;
-  itemAmountRef.current = item.amount;
-  onChangeRef.current = onChange;
-  onCommitRef.current = onCommit;
 
   useEffect(() => {
     if (!autoFocus) return;
@@ -54,23 +45,13 @@ export function SetAsideStat({
     onCommit?.();
   }
 
-  useEffect(() => {
-    function commitInFlight(event: Event) {
-      if (event.type === "visibilitychange" && document.visibilityState !== "hidden") return;
-      if (!editingAmountRef.current) return;
-      const parsed = parseMoneyInput(amountDraftRef.current);
-      if (parsed !== null && parsed !== itemAmountRef.current) {
-        onChangeRef.current({ amount: parsed });
-      }
-      onCommitRef.current?.();
-    }
-    document.addEventListener("visibilitychange", commitInFlight, true);
-    window.addEventListener("pagehide", commitInFlight, true);
-    return () => {
-      document.removeEventListener("visibilitychange", commitInFlight, true);
-      window.removeEventListener("pagehide", commitInFlight, true);
-    };
-  }, []);
+  // A tab hidden mid-edit still commits the typed amount before it can be lost.
+  useFlushOnHide(() => {
+    if (!editingAmount) return;
+    const parsed = parseMoneyInput(amountDraft);
+    if (parsed !== null && parsed !== item.amount) onChange({ amount: parsed });
+    onCommit?.();
+  });
 
   return (
     <div className="relative bg-muted px-4 py-4 sm:px-5" data-stat="set-aside">
@@ -152,7 +133,9 @@ export function AddSetAsideCell({
         className,
       )}
     >
-      <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Each month</p>
+      <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        Each month
+      </p>
       <p className="mt-1 flex items-center gap-2 font-display text-2xl font-medium tracking-tight text-muted-foreground sm:text-3xl">
         <Plus className="size-6" />
         Add

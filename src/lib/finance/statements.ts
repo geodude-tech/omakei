@@ -8,6 +8,24 @@
 import { parseStatementFile } from "./parse.ts";
 import type { AccountKind, ImportFileResult } from "./types.ts";
 
+/**
+ * Fold newly parsed files into the ones already staged for import. A file
+ * re-parsed under the same name replaces its earlier version in place rather
+ * than stacking a duplicate — dropping the same folder twice stages it once.
+ */
+export function mergePreviews(
+  prev: ImportFileResult[],
+  next: ImportFileResult[],
+): ImportFileResult[] {
+  const out = [...prev];
+  for (const item of next) {
+    const idx = out.findIndex((p) => p.filename === item.filename);
+    if (idx >= 0) out[idx] = item;
+    else out.push(item);
+  }
+  return out;
+}
+
 export const STATEMENT_EXTS = new Set([".csv", ".tsv", ".ofx", ".qfx", ".ofc", ".txt"]);
 
 export function isStatementFileName(name: string): boolean {

@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import {
+  type ComponentProps,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -6,14 +13,16 @@ import {
   MoreHorizontal,
   RefreshCw,
   Search,
-  Trash2,
   Upload,
 } from "lucide-react";
 import { toast } from "sonner";
-import { CategorySelect } from "@/components/omakei/category-select";
 import { ImportSheet } from "@/components/omakei/import-sheet";
+import { NeedsCategoryPanel, MERCHANT_PAGE_SIZE } from "@/components/omakei/needs-category";
+import { Pager } from "@/components/omakei/pager";
 import { RulesSheet } from "@/components/omakei/rules-sheet";
 import { AddSetAsideCell, SetAsideStat } from "@/components/omakei/set-aside-stat";
+import { Stat } from "@/components/omakei/stat";
+import { TransactionRow } from "@/components/omakei/transaction-row";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,7 +34,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -34,37 +42,39 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { categoryName } from "@/lib/finance/categories";
-import { exportLedgerCsv, isIncome, isSpend } from "@/lib/finance/ledger";
-import { categoryTotals } from "@/lib/finance/summaries.ts";
+import { exportLedgerCsv } from "@/lib/finance/ledger";
+import { categoryTotals, monthSummary } from "@/lib/finance/summaries.ts";
 import { PanelGrid } from "@/lib/panels/panel-grid.tsx";
 import { isTransferTx } from "@/lib/finance/transfers";
 import { bootLedger } from "@/lib/finance/boot";
 import { saveLedgerNow, setLedgerWritable } from "@/lib/finance/ledger-file";
-import {
-  attachFolder,
-  detachFolder,
-  writeLedger,
-  type AttachedFolder,
-} from "@/lib/finance/server";
+import { attachFolder, detachFolder, writeLedger, type AttachedFolder } from "@/lib/finance/server";
 import { syncAttachedFolder, toastSync } from "@/lib/finance/sync";
 import { clearOpeningMonthFromUrl } from "@/lib/finance/opening-month";
-import { availableNet, setAsideTotal } from "@/lib/finance/set-asides";
 import { unknownMerchants, useLedgerStore } from "@/lib/finance/store";
-import type { SetAside, Transaction } from "@/lib/finance/types";
+import type { Transaction } from "@/lib/finance/types";
 import { FolderPicker } from "@/components/omakei/folder-picker";
+import { pageSlice } from "@/lib/paginate";
+import { trailingCellSpan } from "@/lib/grid";
+import { useFlushOnHide } from "@/lib/use-flush-on-hide";
 import {
   cn,
   downloadTextFile,
-  formatDay,
   formatMoney,
   formatMonthLabel,
   monthKey,
   shiftMonth,
 } from "@/lib/utils";
 
-const MERCHANT_PAGE_SIZE = 12;
 const TX_PAGE_SIZE = 40;
 
 export function Dashboard() {
@@ -119,20 +129,9 @@ export function Dashboard() {
     };
   }, []);
 
-  useEffect(() => {
-    function persistOnHide() {
-      void saveLedgerNow(useLedgerStore.getState());
-    }
-    function persistIfHidden() {
-      if (document.visibilityState === "hidden") persistOnHide();
-    }
-    document.addEventListener("visibilitychange", persistIfHidden);
-    window.addEventListener("pagehide", persistOnHide);
-    return () => {
-      document.removeEventListener("visibilitychange", persistIfHidden);
-      window.removeEventListener("pagehide", persistOnHide);
-    };
-  }, []);
+  useFlushOnHide(() => {
+    void saveLedgerNow(useLedgerStore.getState());
+  });
 
   const months = useMemo(() => {
     const keys = new Set(transactions.map((t) => monthKey(t.date)));
@@ -144,7 +143,7 @@ export function Dashboard() {
     [transactions, selectedMonth],
   );
 
-  const stats = useMemo(() => summarize(monthTx, setAsides), [monthTx, setAsides]);
+  const stats = useMemo(() => monthSummary(monthTx, setAsides), [monthTx, setAsides]);
   const cats = useMemo(() => categoryTotals(monthTx), [monthTx]);
   const unknowns = useMemo(
     () => (detailsReady ? unknownMerchants(transactions) : []),
@@ -177,10 +176,7 @@ export function Dashboard() {
     () => pageSlice(unknowns, merchantPage, MERCHANT_PAGE_SIZE),
     [unknowns, merchantPage],
   );
-  const pagedTx = useMemo(
-    () => pageSlice(filtered, txPage, TX_PAGE_SIZE),
-    [filtered, txPage],
-  );
+  const pagedTx = useMemo(() => pageSlice(filtered, txPage, TX_PAGE_SIZE), [filtered, txPage]);
 
   useEffect(() => {
     setMerchantPage(0);
@@ -265,51 +261,52 @@ export function Dashboard() {
       <header className="sticky top-0 z-30 border-b border-border bg-background/90 backdrop-blur-sm">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 sm:px-6">
           <div className="min-w-0 flex-1">
-            <p className="font-display text-xl font-medium tracking-tight italic sm:text-2xl">Omakei</p>
+            <p className="font-display text-xl font-medium tracking-tight italic sm:text-2xl">
+              Omakei
+            </p>
             <p className="hidden text-xs text-muted-foreground sm:block">
-              {folder ? `Saved in ${folder.name}/omakei-ledger.json` : "Every statement, one ledger"}
+              {folder
+                ? `Saved in ${folder.name}/omakei-ledger.json`
+                : "Every statement, one ledger"}
             </p>
           </div>
           <div className="flex items-center gap-1 rounded-lg bg-card px-1 shadow-[var(--shadow-border)]">
-            <Button variant="ghost" size="icon-sm" aria-label="Previous month" disabled={!canPrev} onClick={() => setMonth(prevMonth)}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Previous month"
+              disabled={!canPrev}
+              onClick={() => setMonth(prevMonth)}
+            >
               <ChevronLeft />
             </Button>
             <p className="min-w-32 text-center font-display text-sm font-medium sm:min-w-40 sm:text-base">
               {formatMonthLabel(selectedMonth)}
             </p>
-            <Button variant="ghost" size="icon-sm" aria-label="Next month" disabled={!canNext} onClick={() => setMonth(nextMonth)}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Next month"
+              disabled={!canNext}
+              onClick={() => setMonth(nextMonth)}
+            >
               <ChevronRight />
             </Button>
           </div>
-          <Button
+          <ResponsiveAction
             onClick={() => void resync()}
             disabled={syncing}
-            className="hidden sm:inline-flex"
-          >
-            <RefreshCw className={cn(syncing && "animate-spin")} />
-            {syncing ? "Syncing" : folder ? "Sync" : "Attach folder"}
-          </Button>
-          <Button
-            size="icon"
-            className="sm:hidden"
-            aria-label={syncing ? "Syncing statements" : "Sync statements"}
-            disabled={syncing}
-            onClick={() => void resync()}
-          >
-            <RefreshCw className={cn(syncing && "animate-spin")} />
-          </Button>
-          <Button variant="outline" onClick={() => setImportOpen(true)} className="hidden sm:inline-flex">
-            <Upload /> Import
-          </Button>
-          <Button
+            icon={<RefreshCw className={cn(syncing && "animate-spin")} />}
+            label={syncing ? "Syncing" : folder ? "Sync" : "Attach folder"}
+            mobileLabel={syncing ? "Syncing statements" : "Sync statements"}
+          />
+          <ResponsiveAction
             variant="outline"
-            size="icon"
-            className="sm:hidden"
-            aria-label="Import statements"
             onClick={() => setImportOpen(true)}
-          >
-            <Upload />
-          </Button>
+            icon={<Upload />}
+            label="Import"
+            mobileLabel="Import statements"
+          />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="icon" aria-label="More">
@@ -320,7 +317,9 @@ export function Dashboard() {
               <DropdownMenuItem onClick={exportCsv}>
                 <Download className="size-4" /> Download clean file
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setRulesOpen(true)}>Auto-categorize rules</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setRulesOpen(true)}>
+                Auto-categorize rules
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setPickerOpen(true)}>
                 {folder ? "Change folder" : "Attach a folder"}
               </DropdownMenuItem>
@@ -346,7 +345,11 @@ export function Dashboard() {
           >
             <Upload className="size-6 text-primary" />
             <span className="font-display text-xl font-medium tracking-tight">
-              {syncing ? "Syncing…" : folder ? "No transactions yet" : "Choose a folder of statements"}
+              {syncing
+                ? "Syncing…"
+                : folder
+                  ? "No transactions yet"
+                  : "Choose a folder of statements"}
             </span>
             <span className="max-w-md text-sm text-muted-foreground">
               {folder
@@ -409,7 +412,7 @@ export function Dashboard() {
         />
 
         {detailsReady && unknowns.length > 0 ? (
-          <UnknownPanel
+          <NeedsCategoryPanel
             merchants={pagedUnknowns.items}
             total={unknowns.length}
             page={pagedUnknowns.page}
@@ -430,21 +433,29 @@ export function Dashboard() {
             <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:justify-end">
               <div className="relative sm:max-w-xs sm:flex-1">
                 <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-                <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search merchants" className="pl-9" aria-label="Search transactions" />
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search merchants"
+                  className="pl-9"
+                  aria-label="Search transactions"
+                />
               </div>
-              <select
-                value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
-                className="h-11 rounded-md border border-input bg-card px-3 text-sm shadow-[var(--shadow-border)]"
-                aria-label="Filter by category"
-              >
-                <option value="all">Spending & income</option>
-                <option value="transfers">Transfers</option>
-                <option value="uncat">Uncategorized</option>
-                {cats.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
+              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                <SelectTrigger className="sm:w-52" aria-label="Filter by category">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Spending &amp; income</SelectItem>
+                  <SelectItem value="transfers">Transfers</SelectItem>
+                  <SelectItem value="uncat">Uncategorized</SelectItem>
+                  {cats.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           {!detailsReady ? (
@@ -454,7 +465,9 @@ export function Dashboard() {
               <Skeleton className="h-12" />
             </div>
           ) : filtered.length === 0 ? (
-            <p className="px-5 py-12 text-center text-sm text-muted-foreground">Nothing matches this month.</p>
+            <p className="px-5 py-12 text-center text-sm text-muted-foreground">
+              Nothing matches this month.
+            </p>
           ) : (
             <>
               <ul className="divide-y divide-border">
@@ -473,7 +486,9 @@ export function Dashboard() {
             </>
           )}
         </section>
-        <p className="pb-20 text-center text-xs text-muted-foreground">Stored only on this device. Download the clean file anytime.</p>
+        <p className="pb-20 text-center text-xs text-muted-foreground">
+          Stored only on this device. Download the clean file anytime.
+        </p>
       </main>
 
       <ImportSheet open={importOpen} onOpenChange={setImportOpen} />
@@ -488,7 +503,9 @@ export function Dashboard() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Clear the ledger?</AlertDialogTitle>
-            <AlertDialogDescription>Transactions on this device will be removed. Auto-categorize rules stay.</AlertDialogDescription>
+            <AlertDialogDescription>
+              Transactions on this device will be removed. Auto-categorize rules stay.
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -508,213 +525,43 @@ export function Dashboard() {
   );
 }
 
-function Stat({
+/** A header action that carries its label on desktop and collapses to an
+ *  icon-only button below the `sm` breakpoint. */
+function ResponsiveAction({
+  icon,
   label,
-  value,
-  tone,
-  hint,
-  hintTone,
-}: {
+  mobileLabel,
+  ...button
+}: ComponentProps<typeof Button> & {
+  icon: ReactNode;
   label: string;
-  value: string;
-  tone?: "income" | "spend" | "reserved";
-  hint?: string;
-  hintTone?: "reserved";
+  mobileLabel: string;
 }) {
   return (
-    <div className="bg-card px-4 py-4 sm:px-5" data-stat={label.toLowerCase()}>
-      <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</p>
-      <p className={cn("mt-1 font-display text-2xl font-medium tracking-tight tabular-nums sm:text-3xl", tone === "income" && "text-income", tone === "spend" && "text-spend", tone === "reserved" && "text-reserved")}>{value}</p>
-      {hint ? (
-        <p className={cn("mt-1 text-xs", hintTone === "reserved" ? "text-reserved" : "text-muted-foreground")}>{hint}</p>
-      ) : null}
-    </div>
+    <>
+      <Button {...button} className={cn("hidden sm:inline-flex", button.className)}>
+        {icon}
+        {label}
+      </Button>
+      <Button
+        {...button}
+        size="icon"
+        aria-label={mobileLabel}
+        className={cn("sm:hidden", button.className)}
+      >
+        {icon}
+      </Button>
+    </>
   );
 }
 
-function UnknownPanel({
-  merchants,
-  total,
-  page,
-  pages,
-  onPage,
-}: {
-  merchants: Array<{ merchant: string; count: number; total: number }>;
-  total: number;
-  page: number;
-  pages: number;
-  onPage: (page: number) => void;
-}) {
-  const categorizeMerchant = useLedgerStore((s) => s.categorizeMerchant);
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Needs a category</CardTitle>
-        <p className="text-sm text-muted-foreground">Set it once — the identifier matches that merchant in any city.</p>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        {merchants.map((m) => (
-          <div key={m.merchant} className="flex flex-col gap-2 rounded-md bg-muted/50 px-3 py-3 sm:flex-row sm:items-center">
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{m.merchant}</p>
-              <p className="text-xs text-muted-foreground">
-                {m.count} {m.count === 1 ? "transaction" : "transactions"} · {formatMoney(m.total, { sign: true })}
-              </p>
-            </div>
-            <CategorySelect
-              value={null}
-              onChange={(id) => {
-                categorizeMerchant(m.merchant, id);
-                void saveLedgerNow(useLedgerStore.getState());
-                toast.success(`Always categorize \u201c${m.merchant}\u201d as ${categoryName(id)}`);
-              }}
-              placeholder="Assign"
-              size="sm"
-              className="sm:w-48"
-            />
-          </div>
-        ))}
-        <Pager
-          page={page}
-          pages={pages}
-          total={total}
-          pageSize={MERCHANT_PAGE_SIZE}
-          noun="merchants"
-          onPage={onPage}
-        />
-      </CardContent>
-    </Card>
-  );
-}
-
-function TransactionRow({ tx }: { tx: Transaction }) {
-  const categorizeOne = useLedgerStore((s) => s.categorizeOne);
-  const deleteTransaction = useLedgerStore((s) => s.deleteTransaction);
-  return (
-    <li className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4 sm:px-5">
-      <p className="w-16 shrink-0 text-xs text-muted-foreground tabular-nums">{formatDay(tx.date)}</p>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium">{tx.description}</p>
-        <p className="truncate text-xs text-muted-foreground">
-          {tx.accountName}
-          {isTransferTx(tx) ? " · transfer" : ""}
-        </p>
-      </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <CategorySelect
-          value={tx.categoryId}
-          onChange={(id) => {
-            categorizeOne(tx.id, id, true);
-            void saveLedgerNow(useLedgerStore.getState());
-          }}
-          size="sm"
-          placeholder={tx.categoryId ? undefined : "Set category"}
-          className="w-36 sm:w-40"
-        />
-        <p
-          className={cn(
-            "ml-auto w-24 text-right text-sm tabular-nums sm:ml-0",
-            isTransferTx(tx) ? "text-muted-foreground" : tx.amount < 0 ? "text-spend" : "text-income",
-          )}
-        >
-          {formatMoney(tx.amount, { sign: true })}
-        </p>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Remove transaction"
-          onClick={() => {
-            deleteTransaction(tx.id);
-            void saveLedgerNow(useLedgerStore.getState());
-          }}
-        >
-          <Trash2 className="size-4" />
-        </Button>
-      </div>
-    </li>
-  );
-}
-
+/** Grid classes for the "Add" set-aside cell, so it fills the rest of its row
+ *  at both the 2-column and 4-column breakpoints. */
 function addSetAsideSpan(cellCount: number): string {
-  const sm = 2 - ((cellCount % 2) || 2) + 1;
-  const md = 4 - ((cellCount % 4) || 4) + 1;
-  return cn(sm > 1 && "col-span-2", {
+  const md = trailingCellSpan(cellCount, 4);
+  return cn(trailingCellSpan(cellCount, 2) === 2 && "col-span-2", {
     "md:col-span-2": md === 2,
     "md:col-span-3": md === 3,
     "md:col-span-4": md === 4,
   });
 }
-
-function summarize(rows: Transaction[], setAsides: SetAside[]) {
-  let spent = 0;
-  let income = 0;
-  let uncategorized = 0;
-  for (const tx of rows) {
-    if (isSpend(tx)) spent += Math.abs(tx.amount);
-    if (isIncome(tx)) income += tx.amount;
-    if (!tx.categoryId) uncategorized += 1;
-  }
-  const cashflow = income - spent;
-  const allocated = setAsideTotal(setAsides);
-  return { spent, income, cashflow, allocated, net: availableNet(cashflow, setAsides), uncategorized };
-}
-
-function pageSlice<T>(items: T[], page: number, pageSize: number) {
-  const pages = Math.max(1, Math.ceil(items.length / pageSize) || 1);
-  const safe = Math.min(Math.max(0, page), pages - 1);
-  return {
-    items: items.slice(safe * pageSize, (safe + 1) * pageSize),
-    page: safe,
-    pages,
-    total: items.length,
-  };
-}
-
-function Pager({
-  page,
-  pages,
-  total,
-  pageSize,
-  noun,
-  onPage,
-}: {
-  page: number;
-  pages: number;
-  total: number;
-  pageSize: number;
-  noun: string;
-  onPage: (page: number) => void;
-}) {
-  if (total <= pageSize) return null;
-  const from = page * pageSize + 1;
-  const to = Math.min(total, (page + 1) * pageSize);
-  return (
-    <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-      <p className="text-xs text-muted-foreground">
-        {from}–{to} of {total} {noun}
-      </p>
-      <div className="flex gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={page <= 0}
-          aria-label={`Previous ${noun}`}
-          onClick={() => onPage(page - 1)}
-        >
-          Previous
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={page >= pages - 1}
-          aria-label={`Next ${noun}`}
-          onClick={() => onPage(page + 1)}
-        >
-          Next
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-
