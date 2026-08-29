@@ -36,6 +36,13 @@ Panel {
   property var ledger: null
   property string viewMonth: Model.currentMonth()
   property var monthSummary: Model.emptySummary(viewMonth)
+  /**
+   * While true, a synced ledger sets `viewMonth` for us -- normally this month,
+   * but the newest month with activity when this month is empty. Stepping
+   * through months with `‹` / `›` turns it off so a background sync cannot yank
+   * the view; `t` ("this month") turns it back on.
+   */
+  property bool followLedgerMonth: true
 
   readonly property var currentSummary: {
     var now = Model.currentMonth(today)
@@ -101,6 +108,7 @@ Panel {
       return
     }
     root.ledger = out.ledger
+    if (root.followLedgerMonth) root.viewMonth = Model.openingMonth(root.ledger, root.today)
     root.applyLedger()
   }
 
@@ -109,11 +117,13 @@ Panel {
   }
 
   function moveMonth(delta) {
+    root.followLedgerMonth = false
     viewMonth = Model.shiftMonth(viewMonth, delta)
     applyLedger()
   }
 
   function goToCurrentMonth() {
+    root.followLedgerMonth = true
     viewMonth = Model.currentMonth(today)
     applyLedger()
   }
@@ -190,7 +200,7 @@ Panel {
     onDateChanged: {
       var next = Model.currentMonth(clock.date)
       if (next === Model.currentMonth(root.today)) return
-      var follow = root.viewMonth === Model.currentMonth(root.today)
+      var follow = root.followLedgerMonth || root.viewMonth === Model.currentMonth(root.today)
       root.today = clock.date
       if (follow) root.goToCurrentMonth()
     }

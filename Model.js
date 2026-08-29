@@ -62,6 +62,46 @@ function shiftMonth(key, delta) {
   return currentMonth(d)
 }
 
+function monthOf(tx) {
+  return String((tx && tx.date) || "").slice(0, 7)
+}
+
+/** The newest "YYYY-MM" any transaction falls in, or "" for none. */
+function latestMonth(transactions) {
+  var rows = Array.isArray(transactions) ? transactions : []
+  var latest = ""
+  for (var i = 0; i < rows.length; i++) {
+    var key = monthOf(rows[i])
+    if (key.length === 7 && key > latest) latest = key
+  }
+  return latest
+}
+
+function monthHasTransactions(transactions, key) {
+  var rows = Array.isArray(transactions) ? transactions : []
+  for (var i = 0; i < rows.length; i++) {
+    if (monthOf(rows[i]) === key) return true
+  }
+  return false
+}
+
+/**
+ * The month the popup opens on. It normally tracks the calendar, but a freshly
+ * synced ledger often holds only closed statement periods -- last month's
+ * export, dropped in on the 3rd -- and a strict current-month view would then
+ * show nothing but zeros. So when this month is empty, fall back to the month
+ * the editor last had open, then to the newest month with any activity.
+ */
+function openingMonth(ledger, today) {
+  var now = currentMonth(today)
+  var transactions = ledger && ledger.transactions
+  if (!Array.isArray(transactions) || transactions.length === 0) return now
+  if (monthHasTransactions(transactions, now)) return now
+  var selected = ledger && ledger.selectedMonth
+  if (selected && monthHasTransactions(transactions, selected)) return selected
+  return latestMonth(transactions) || now
+}
+
 function formatMonthLabel(key) {
   var parts = String(key || "").split("-")
   var year = Number(parts[0])
@@ -229,7 +269,7 @@ function summarize(transactions, month, setAsides) {
 
   for (var i = 0; i < rows.length; i++) {
     var tx = rows[i]
-    if (!tx || String(tx.date).slice(0, 7) !== key) continue
+    if (!tx || monthOf(tx) !== key) continue
     if (isSpend(tx)) {
       var amount = Math.abs(tx.amount)
       spent += amount
