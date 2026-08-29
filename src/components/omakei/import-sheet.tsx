@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/sheet";
 import { parseStatementFile } from "@/lib/finance/parse";
 import { mergePreviews, parseDroppedFiles } from "@/lib/finance/statements";
-import { importAndSave } from "@/lib/finance/sync";
+import { importAndSave, toastImport } from "@/lib/finance/sync";
 import { ACCOUNT_KIND_LABEL, type AccountKind, type ImportFileResult } from "@/lib/finance/types";
 import { formatMoney, cn } from "@/lib/utils";
 
@@ -76,12 +76,7 @@ export function ImportSheet({
       const summary = await importAndSave(previews);
       setPreviews([]);
       onOpenChange(false);
-      toast.success(
-        `${summary.added} added · ${summary.skipped} duplicate${summary.skipped === 1 ? "" : "s"} skipped`,
-      );
-      if (summary.uncategorized > 0) {
-        toast.message(`${summary.uncategorized} still need a category`);
-      }
+      toastImport(summary);
     } finally {
       setBusy(false);
     }

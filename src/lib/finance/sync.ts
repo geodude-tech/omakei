@@ -48,15 +48,26 @@ export async function syncAttachedFolder(folderName: string): Promise<SyncResult
   };
 }
 
+/** "3 added · 1 duplicate skipped" — shared by the sheet import and a folder sync. */
+export function importSummaryLine(s: { added: number; skipped: number }): string {
+  return `${s.added} added · ${s.skipped} duplicate${s.skipped === 1 ? "" : "s"} skipped`;
+}
+
+/** Toast the outcome of a one-off import (the Import sheet, the empty-state drop). */
+export function toastImport(summary: ImportSummary): void {
+  toast.success(importSummaryLine(summary));
+  if (summary.uncategorized > 0) {
+    toast.message(`${summary.uncategorized} still need a category`);
+  }
+}
+
 export function toastSync(result: SyncResult): void {
   if (result.empty) {
     toast.message(`Attached ${result.folderName}. Drop OFX, QFX, or CSV exports into it.`);
     return;
   }
   if (result.files) {
-    toast.success(
-      `${result.added} added · ${result.skipped} duplicate${result.skipped === 1 ? "" : "s"} skipped`,
-    );
+    toast.success(importSummaryLine(result));
   } else {
     toast.success(`Opened the ledger in ${result.folderName}`);
   }

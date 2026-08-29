@@ -44,7 +44,7 @@ account kind `credit`, same as the server-path case does for `Credit/aug.csv`.
 
 ---
 
-## Task 2: Extract `toastImport(summary)` in `sync.ts`
+## Task 2: Extract `toastImport(summary)` in `sync.ts` — DONE
 
 **Description:** Move the "N added · M duplicates skipped" + "K still need a
 category" toast block out of `ImportSheet.commit` into a `toastImport(summary:
