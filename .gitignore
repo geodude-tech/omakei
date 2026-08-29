@@ -33,3 +33,8 @@ statements/
 
 # Claude Code's scratch worktrees: whole checkouts of this repo, never committed.
 .claude/worktrees/
+
+# Per-branch planning scratch from the spec-driven workflow (tasks/plan.md,
+# tasks/todo.md). The durable artifact is the spec under docs/spec/; the plan
+# and todo are working notes and only create merge noise on main.
+tasks/

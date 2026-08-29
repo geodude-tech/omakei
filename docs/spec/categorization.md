@@ -168,7 +168,7 @@ surfaces are checked by hand.
   ledger — add, idempotent re-run, `--remove`, `--dry-run` (byte-identical
   file), `--list`, unknown category, no attached folder.
 - **`fingerprint.test.ts`:** an `extractMerchant` corpus of real-shape bank
-  lines; four cases are marked `WRONG` and tracked in `tasks/plan.md` (OQ4).
+  lines; four cases are marked `WRONG` in the test and summarized in OQ4 below.
 - **`ledger-contract.test.ts` (existing):** still guards `CATEGORIES` against
   `docs/ledger.md`.
 
@@ -244,7 +244,7 @@ case if the match isn't obvious.
    keys (drops the distinguishing word; splits Amazon; keeps a per-transaction
    code; misses the `DEBIT CARD PURCHASE` prefix). A `PREFIXES` entry and a
    trailing-`*CODE` strip are small follow-ups; the "drops the distinguishing
-   word" behavior needs its own look. Not done here — see `tasks/plan.md`.
+   word" behavior needs its own look. Not done here.
 
 5. **`transaction-row.tsx` always writes a merchant rule**
    (`categorizeOne(id, cat, true)`). There is no "just this one" — every
