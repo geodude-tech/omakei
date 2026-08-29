@@ -225,13 +225,9 @@ export function Dashboard() {
     }
   }
 
-  /** Re-read the attached folder, or ask for one if none is attached yet. */
+  /** Re-read the attached folder and merge anything new. */
   async function resync() {
-    if (syncing) return;
-    if (!folder) {
-      setPickerOpen(true);
-      return;
-    }
+    if (syncing || !folder) return;
     setSyncing(true);
     try {
       toastSync(await syncAttachedFolder(folder.name));
@@ -314,13 +310,15 @@ export function Dashboard() {
               <ChevronRight />
             </Button>
           </div>
-          <ResponsiveAction
-            onClick={() => void resync()}
-            disabled={syncing}
-            icon={<RefreshCw className={cn(syncing && "animate-spin")} />}
-            label={syncing ? "Syncing" : folder ? "Sync" : "Attach folder"}
-            mobileLabel={syncing ? "Syncing statements" : "Sync statements"}
-          />
+          {folder ? (
+            <ResponsiveAction
+              onClick={() => void resync()}
+              disabled={syncing}
+              icon={<RefreshCw className={cn(syncing && "animate-spin")} />}
+              label={syncing ? "Syncing" : "Sync"}
+              mobileLabel={syncing ? "Syncing statements" : "Sync statements"}
+            />
+          ) : null}
           <ResponsiveAction
             variant="outline"
             onClick={() => setImportOpen(true)}

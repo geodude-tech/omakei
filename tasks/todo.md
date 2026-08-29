@@ -184,7 +184,7 @@ folder-attached variant of the copy (mention the folder + sync).
 
 ---
 
-## Task 6: Remove the header Attach-folder affordance; gate Sync on `folder`
+## Task 6: Remove the header Attach-folder affordance; gate Sync on `folder` — DONE
 
 **Description:** The header's Sync/Attach `ResponsiveAction` renders only when
 `folder` is set, and its label is always "Sync" (drop the `folder ? … : "Attach
