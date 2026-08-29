@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ChevronRight, CornerLeftUp, Folder, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sheet,
@@ -64,27 +65,35 @@ export function FolderPicker({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full sm:max-w-lg">
         <SheetHeader>
-          <SheetTitle>Choose your statements folder</SheetTitle>
+          <SheetTitle>Attach your statements folder</SheetTitle>
           <SheetDescription>
-            Omakei reads the exports in it and writes <code>omakei-ledger.json</code> back into
-            the same folder. Subfolders are included.
+            Point Omakei at the folder your exports already live in. It reads the
+            statements there, writes <code>omakei-ledger.json</code> back beside them,
+            and keeps the bar in sync. Subfolders are included.
           </SheetDescription>
         </SheetHeader>
 
-        <div className="flex items-center gap-2 px-5 pt-4">
-          <Input
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void go(typed);
-            }}
-            aria-label="Folder path"
-            spellCheck={false}
-            className="font-mono text-xs"
-          />
-          <Button variant="outline" size="sm" onClick={() => void go(typed)} disabled={busy}>
-            Go
-          </Button>
+        <div className="flex flex-col gap-2 px-5 pt-4">
+          <Label htmlFor="folder-path">Folder path</Label>
+          <div className="flex items-center gap-2">
+            <Input
+              id="folder-path"
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void go(typed);
+              }}
+              placeholder="~/Documents/Statements"
+              spellCheck={false}
+              className="font-mono text-xs"
+            />
+            <Button variant="outline" size="sm" onClick={() => void go(typed)} disabled={busy}>
+              Go
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Paste or type the path and press Go — or click through the folders below.
+          </p>
         </div>
         {error ? <p className="px-5 pt-2 text-xs text-destructive">{error}</p> : null}
 
@@ -125,14 +134,17 @@ export function FolderPicker({
 
         <div className="flex items-center justify-between gap-3 border-t border-border px-5 pt-4 pb-16">
           <p className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-            {listing?.path ?? ""}
+            {typed || listing?.path || ""}
           </p>
           <Button
-            onClick={() => listing && void choose(listing.path)}
-            disabled={busy || !listing}
+            onClick={() => {
+              const target = typed.trim() || listing?.path;
+              if (target) void choose(target);
+            }}
+            disabled={busy || !(typed.trim() || listing)}
           >
             <FolderOpen className="size-4" />
-            {busy ? "Attaching" : "Use this folder"}
+            {busy ? "Attaching" : "Attach this folder"}
           </Button>
         </div>
       </SheetContent>
