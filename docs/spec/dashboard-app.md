@@ -58,9 +58,11 @@ src/components/omakei/set-aside-stat.tsx → editable set-aside tile + "Add" cel
 src/components/omakei/needs-category.tsx → the uncategorized-merchant list
 src/components/omakei/transaction-row.tsx, pager.tsx → the activity table's parts
 src/components/omakei/import-sheet.tsx   → one-off file / pasted-CSV import
+src/components/omakei/statement-dropzone.tsx → shared drop box (files + dropped folder), used by the sheet and the empty state
 src/components/omakei/rules-sheet.tsx    → view/delete categorize rules
-src/components/omakei/folder-picker.tsx  → server-backed directory picker
+src/components/omakei/folder-picker.tsx  → server-backed directory picker (3-dot menu only)
 src/components/omakei/daily-spend-chart.tsx, category-select.tsx
+src/lib/finance/dropped-entries.ts → walk a drag-and-drop (incl. folders) into a flat File[]
 src/lib/finance/boot.ts     → startup: inline state → store, then background sync
 src/lib/finance/store.ts    → the Zustand ledger store (in memory; the file is the only durable copy)
 src/lib/finance/ledger-file.ts → snapshot shape + the 32 ms save debounce
@@ -148,7 +150,19 @@ category). Paged at 40. Resets to page 1 on month/query/filter change.
 `ImportSheet` accepts dropped/chosen files (`.csv,.tsv,.ofx,.qfx,.ofc,.txt`) or
 pasted CSV, shows a per-file preview with editable account name and kind, and
 commits through `importAndSave` — the same merge path as a folder sync, so
-duplicates are skipped either way.
+duplicates are skipped either way. The drop target is the shared
+`StatementDropzone`, which also walks a **dropped folder** via the entries API
+(`dropped-entries.ts`); clicking it opens a multi-file picker (one `<input>`
+cannot be both `multiple` and `webkitdirectory`, so a whole folder goes in by
+drag or through the folder picker).
+
+### The empty state
+
+`transactions.length === 0` renders one card built around the same
+`StatementDropzone`. Dropping or choosing there imports **immediately** —
+`parseDroppedFiles` → `importAndSave` → `toastImport` — with no per-file preview;
+a mis-guessed account kind is corrected afterward, not before. The card stays put
+when a folder is attached but still empty, as a one-off import alongside Sync.
 
 ### CSV export
 
@@ -157,8 +171,10 @@ names, offered as a browser download (never written to disk by the app).
 
 ### No sample ledger
 
-There is no dummy data. An empty ledger renders a call-to-action to attach or
-sync a folder.
+There is no dummy data. An empty ledger renders the drop-zone card above. The
+server-backed folder picker (which enables the bar's autonomous sync) is reached
+from the 3-dot menu — "Attach a folder" / "Change folder"; the header carries no
+attach button, and its "Sync" action shows only once a folder is attached.
 
 ## Testing Strategy
 
@@ -206,7 +222,7 @@ panels).
 
 ## Success Criteria
 
-Verified against the current suite (2026-08-28): 76 tests pass.
+Verified against the current suite (2026-08-28): 82 tests pass.
 
 1. **Met.** `monthSummary` for the `docs/ledger.md` worked month produces
    spend `$3,580.51`, income `$8,421.10`, net `+$4,190.59` (ledger-contract
@@ -220,6 +236,10 @@ Verified against the current suite (2026-08-28): 76 tests pass.
    over `selectedMonth` (`opening-month.test.ts` + `boot.ts`).
 5. **Met.** No `localStorage`/`sessionStorage` and no `fetch` to any non-`/__omakei`
    origin anywhere in `src/`.
+6. **Met.** The empty state is a `StatementDropzone`; a drop imports through
+   `parseDroppedFiles` → `importAndSave` with no preview, and `collectEntryFiles`
+   flattens a dropped folder (`dropped-entries.test.ts`). The header shows no
+   attach control; "Sync" renders only when `folder` is set.
 
 ## Open Questions
 

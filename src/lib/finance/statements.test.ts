@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isStatementFileName, kindFromLocalPath, mergePreviews } from "./statements.ts";
+import {
+  droppedStatementPath,
+  isStatementFileName,
+  kindFromLocalPath,
+  mergePreviews,
+  parseStatementAtPath,
+} from "./statements.ts";
 import type { ImportFileResult } from "./types.ts";
 
 function preview(filename: string, rowCount: number): ImportFileResult {
@@ -31,6 +37,30 @@ test("kindFromLocalPath reads the top folder name, else keeps the fallback", () 
   assert.equal(kindFromLocalPath("Credit Card/feb.qfx", "other"), "credit");
   assert.equal(kindFromLocalPath("Savings/x.csv", "other"), "savings");
   assert.equal(kindFromLocalPath("Downloads/x.csv", "checking"), "checking");
+});
+
+test("droppedStatementPath keeps a loose file's name and strips a folder's container segment", () => {
+  // Dragged in loose: no relative path, the name is the whole story.
+  assert.equal(droppedStatementPath("", "aug.csv"), "aug.csv");
+  assert.equal(droppedStatementPath("aug.csv", "aug.csv"), "aug.csv");
+
+  // Came in as part of a folder: the first segment is the folder the user
+  // picked, not a category — drop it so Credit/ lands where kindFromLocalPath reads.
+  assert.equal(droppedStatementPath("MyStatements/Credit/aug.csv", "aug.csv"), "Credit/aug.csv");
+  assert.equal(droppedStatementPath("MyStatements/aug.csv", "aug.csv"), "aug.csv");
+
+  // Normalize Windows separators and a leading slash from the entries API.
+  assert.equal(droppedStatementPath("My\\Credit\\aug.csv", "aug.csv"), "Credit/aug.csv");
+  assert.equal(droppedStatementPath("/Folder/Credit/aug.csv", "aug.csv"), "Credit/aug.csv");
+});
+
+test("a folder-relative path still drives the account kind after the container strip", () => {
+  const csv = "Date,Description,Amount\n2026-08-01,COFFEE SHOP,-4.50\n";
+  const dropped = parseStatementAtPath(
+    droppedStatementPath("MyStatements/Credit/aug.csv", "aug.csv"),
+    csv,
+  );
+  assert.equal(dropped.accountKind, "credit");
 });
 
 test("mergePreviews appends files it has not seen", () => {
