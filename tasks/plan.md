@@ -148,6 +148,23 @@ Task 7  build dist/ + full verification pass
    _Recommend: a "Writing back" section in `docs/ledger.md` — one file for the
    whole ledger contract._
 
+## Findings from characterization (Phase 1) — recorded, not fixed here
+
+`extractMerchant` (fingerprint corpus, Task 2) produces a wrong grouping key on:
+
+- `SQ *SUNRISE BAKERY …` → `SUNRISE` — drops the distinguishing word.
+- `TRADER JOE'S #123 …` → `TRADER` — drops `JOE'S`; `trader` is too broad.
+- `AMZN MKTP US*…` → `AMZN MKTP` **and** `AMAZON.COM*RT4G12 …` → `AMAZON.COM*RT4G12`
+  — two keys for Amazon, and the second keeps a per-transaction code so the rule
+  it seeds matches exactly one row.
+- `DEBIT CARD PURCHASE TARGET T-1234 …` → `PURCHASE` — the `DEBIT CARD PURCHASE`
+  prefix is not in `PREFIXES`, so a rule `purchase` would match almost everything.
+
+These feed categorization spec OQ4. A `PREFIXES` entry for `DEBIT CARD PURCHASE`
+and stripping a trailing `*CODE` are small, low-risk follow-ups; the broader
+"drops the distinguishing word" behavior needs its own look. Out of scope for
+this plan.
+
 ## Definition of Done (every task)
 
 `npm test` + `npm run typecheck` + `npm run lint` green; no regressions; behavior
