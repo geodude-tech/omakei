@@ -6,9 +6,15 @@ Open questions all resolved (2026-08-28): PR #5 merged (no conflict);
 click-to-choose = files only (folder by drag / menu); drop zone stays on the
 folder-attached zero-transaction state.
 
+Build note: the pre-commit hook runs `check-dist-fresh`, so every task commit
+that touches a build input (`src/**` non-test, `index.html`, `vite.config.ts`,
+`scripts/page-shell.mjs`) rebuilds `dist/` and stages it in the same commit
+(`npm run build` is <1s). Task 8 is therefore just a final full-suite +
+end-to-end pass, not a separate build commit.
+
 ---
 
-## Task 1: Fold folder-relative paths into `parseDroppedFiles`
+## Task 1: Fold folder-relative paths into `parseDroppedFiles` — DONE (37b8183..)
 
 **Description:** Make `parseDroppedFiles` handle files that arrive with a
 folder-relative path (from a dragged folder or a `webkitdirectory` input), so the
