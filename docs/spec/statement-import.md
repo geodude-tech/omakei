@@ -19,8 +19,10 @@ sync, and let a wrong guess be corrected once.
 
 **Success:**
 
-- Dropping a folder of OFX/QFX/CSV/TSV/OFC/txt exports produces a ledger whose
-  monthly spend, income, and net match the five rules in `docs/ledger.md`.
+- Dropping a folder of OFX/QFX/CSV/TSV/OFC/txt exports — onto the dashboard's
+  drop zone in the browser, or into the attached folder for the server to sync —
+  produces a ledger whose monthly spend, income, and net match the five rules in
+  `docs/ledger.md`.
 - Re-syncing the same folder adds nothing and changes nothing.
 - Adding next month's export to the folder and syncing adds only that month.
 - A merchant categorized once by hand is categorized automatically on the next
@@ -47,7 +49,8 @@ Dev:       npm run dev:isolated   # import against .dev/, never your real ledger
 
 ```
 src/lib/finance/parse.ts        → format detection, column detection, date/amount parsing, sign normalization
-src/lib/finance/statements.ts   → account-kind from folder name; dropped-file vs server-path entry points; preview merge
+src/lib/finance/statements.ts   → account-kind from folder name; dropped-file vs server-path entry points; container-segment strip; preview merge
+src/lib/finance/dropped-entries.ts → flatten a browser drag-and-drop, folders included, into File[] (used by StatementDropzone)
 src/lib/finance/categories.ts   → CATEGORIES, the default categorizer patterns, categoryName()
 src/lib/finance/fingerprint.ts  → merchant extraction, the dedupe fingerprint, rule matching
 src/lib/finance/transfers.ts    → internal-transfer detection and opposite-leg pairing
@@ -94,7 +97,11 @@ Conventions the code already holds to:
   beats `safeway` (groceries).
 - **A folder name outranks the file's own headers.** `kindFromLocalPath` checks
   the top path segment (`Mortgage/`, `Credit/`, `Checking/`, `Savings/`) and
-  overrides whatever `inferKindFromName` guessed from the filename.
+  overrides whatever `inferKindFromName` guessed from the filename. For a file
+  that arrived inside a **dropped folder**, `droppedStatementPath` first drops
+  the one container segment the browser prepends (`Picked/Credit/aug.csv` →
+  `Credit/aug.csv`), so the top segment is a category, not the folder the user
+  grabbed — the same shape the server hands over for an attached folder.
 - **Parsing is total.** A row that cannot yield a date, a description, and an
   amount is skipped, not defaulted. `mapCsvRows` and `parseOfx` both `continue`
   past unusable rows.
@@ -154,6 +161,18 @@ the ledger and takes only `max(0, incomingCount - haveCount)` of each — so a
 statement that legitimately repeats a charge twice keeps both, but re-importing
 the same file adds nothing.
 
+### Browser folder drop
+
+The dashboard's drop zone (`StatementDropzone`) takes files the browser hands
+over directly. `DataTransfer.files` does not descend into a dropped directory, so
+`collectEntryFiles` (`dropped-entries.ts`) walks the entries API —
+`webkitGetAsEntry()`, then `createReader().readEntries()` drained in a loop
+(~100 children per call) — into a flat `File[]`, each tagged with its
+drop-relative path. Those go through `parseDroppedFiles` → `importFiles`, the
+same merge as a sync, so a browser folder drop and a server sync of the same
+files produce the same ledger. The empty-state path skips the per-file preview;
+`inferKindFromName` / the folder-name strip carry the account kind.
+
 ### Merge is one pass
 
 `sync.ts` reads every statement in the folder, parses all of them, and calls
@@ -177,7 +196,10 @@ veto the pairing.
 - `fingerprint.test.ts` — merchant extraction and `ruleMatches` (town/store-id
   insensitivity, `/regex/` literals, compact-span matches like `WAL-MART`).
 - `transfers.test.ts` — the pairing cases, plus "payroll is never a transfer".
-- `statements.test.ts` — `kindFromLocalPath` precedence, preview de-duplication.
+- `statements.test.ts` — `kindFromLocalPath` precedence, preview de-duplication,
+  `droppedStatementPath` container strip.
+- `dropped-entries.test.ts` — `collectEntryFiles` flattens a fake entry tree,
+  keeps a loose file's bare name, and drains a directory reader across batches.
 - `ledger-contract.test.ts` — guards the `CATEGORIES` table against
   `docs/ledger.md` (see the ledger-contract spec).
 
@@ -211,8 +233,9 @@ obvious.
 
 ## Success Criteria
 
-Verified against the current suite (2026-08-28): 76 tests pass, including all of
-`parse`, `statements`, `fingerprint`, `transfers`, and `ledger-contract`.
+Verified against the current suite (2026-08-28): 82 tests pass, including all of
+`parse`, `statements`, `dropped-entries`, `fingerprint`, `transfers`, and
+`ledger-contract`.
 
 1. **Met.** OFX, headerless CSV, debit/credit-split CSV, and parenthesized-negative
    fixtures all parse to the expected rows in `parse.test.ts`.

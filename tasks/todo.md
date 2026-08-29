@@ -225,7 +225,7 @@ button goes away)
 
 ---
 
-## Task 7: Update the specs
+## Task 7: Update the specs — DONE
 
 **Description:** Bring the two affected specs in line with the new behavior.
 
