@@ -77,7 +77,7 @@ calls it. No copy changes.
 
 ---
 
-## Task 3: `statement-dropzone.tsx` — shared box with folder-drop support
+## Task 3: `statement-dropzone.tsx` — shared box with folder-drop support — DONE
 
 **Description:** New `src/components/omakei/statement-dropzone.tsx`. Renders the
 dashed drop box (the markup currently inline in `import-sheet.tsx`): icon,
