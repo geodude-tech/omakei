@@ -112,7 +112,7 @@ it takes the `DataTransferItemList` and returns `Promise<File[]>`.
 
 ---
 
-## Task 4: `ImportSheet` renders `StatementDropzone`
+## Task 4: `ImportSheet` renders `StatementDropzone` — DONE
 
 **Description:** Replace the inline dashed-box markup + its `<input>` in
 `import-sheet.tsx` with `<StatementDropzone onFiles={stage} />`. The staging

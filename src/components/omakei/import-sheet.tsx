@@ -5,9 +5,9 @@
  * it on every open. This is for the exceptions: a file that lives somewhere
  * else, or a table pasted out of a bank's web page.
  */
-import { useRef, useState } from "react";
-import { Upload } from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
+import { StatementDropzone } from "@/components/omakei/statement-dropzone";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,7 +30,7 @@ import { parseStatementFile } from "@/lib/finance/parse";
 import { mergePreviews, parseDroppedFiles } from "@/lib/finance/statements";
 import { importAndSave, toastImport } from "@/lib/finance/sync";
 import { ACCOUNT_KIND_LABEL, type AccountKind, type ImportFileResult } from "@/lib/finance/types";
-import { formatMoney, cn } from "@/lib/utils";
+import { formatMoney } from "@/lib/utils";
 
 const KINDS: AccountKind[] = ["checking", "savings", "credit", "mortgage", "other"];
 
@@ -43,9 +43,7 @@ export function ImportSheet({
 }) {
   const [previews, setPreviews] = useState<ImportFileResult[]>([]);
   const [busy, setBusy] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
   const [paste, setPaste] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
 
   async function stage(files: File[]) {
     setBusy(true);
@@ -86,20 +84,7 @@ export function ImportSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        side="right"
-        className="w-full sm:max-w-lg"
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragOver(false);
-          void stage(Array.from(e.dataTransfer.files));
-        }}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-      >
+      <SheetContent side="right" className="w-full sm:max-w-lg">
         <SheetHeader>
           <SheetTitle>Import a one-off file</SheetTitle>
           <SheetDescription>
@@ -110,29 +95,10 @@ export function ImportSheet({
 
         <ScrollArea className="min-h-0 flex-1">
           <div className="flex flex-col gap-5 px-5 py-5">
-            <button
-              type="button"
-              onClick={() => inputRef.current?.click()}
-              className={cn(
-                "flex min-h-32 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/40 px-4 py-6 text-center transition-[background-color,border-color] duration-150",
-                dragOver && "border-primary bg-secondary",
-              )}
-            >
-              <Upload className="size-5 text-primary" />
-              <span className="text-sm font-medium">Drop files, or click to choose</span>
-              <span className="text-xs text-muted-foreground">OFX, QFX, OFC, CSV, or TSV</span>
-            </button>
-            <input
-              ref={inputRef}
-              type="file"
-              accept=".csv,.tsv,.ofx,.qfx,.ofc,.txt,text/csv"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                const list = e.target.files;
-                e.target.value = "";
-                if (list) void stage(Array.from(list));
-              }}
+            <StatementDropzone
+              onFiles={(files) => void stage(files)}
+              disabled={busy}
+              label="Drop statements or a folder, or click to choose files"
             />
 
             <div className="flex flex-col gap-2">
