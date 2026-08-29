@@ -42,10 +42,12 @@ Dev:       npm run dev            # 127.0.0.1:8080
 src/panels/                 → one file per panel, auto-discovered
 src/panels/README.md        → the contract, written for an agent to read
 src/lib/panels/registry.ts  → import.meta.glob discovery + ordering (core, not a panel)
+src/lib/panels/validate.ts  → pure module validation, no Vite API, unit-tested below
 src/lib/panels/panel-frame.tsx → Card wrapper + per-panel error boundary (core)
 src/lib/panels/panel-grid.tsx  → the five-column grid, and the pre-`ready` placeholders
 src/lib/panels/span.ts      → span number → grid class
 src/lib/finance/types.ts    → PanelProps, PanelMeta live here beside Transaction
+src/lib/finance/panels.test.ts → registry smoke test, against validate.ts
 ```
 
 No registry file lists the panels. `src/lib/panels/registry.ts` discovers them:
