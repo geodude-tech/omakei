@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import {
+  type ComponentProps,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -35,6 +42,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { categoryName } from "@/lib/finance/categories";
 import { exportLedgerCsv } from "@/lib/finance/ledger";
@@ -51,6 +65,7 @@ import type { Transaction } from "@/lib/finance/types";
 import { FolderPicker } from "@/components/omakei/folder-picker";
 import { pageSlice } from "@/lib/paginate";
 import { trailingCellSpan } from "@/lib/grid";
+import { useFlushOnHide } from "@/lib/use-flush-on-hide";
 import {
   cn,
   downloadTextFile,
@@ -114,20 +129,9 @@ export function Dashboard() {
     };
   }, []);
 
-  useEffect(() => {
-    function persistOnHide() {
-      void saveLedgerNow(useLedgerStore.getState());
-    }
-    function persistIfHidden() {
-      if (document.visibilityState === "hidden") persistOnHide();
-    }
-    document.addEventListener("visibilitychange", persistIfHidden);
-    window.addEventListener("pagehide", persistOnHide);
-    return () => {
-      document.removeEventListener("visibilitychange", persistIfHidden);
-      window.removeEventListener("pagehide", persistOnHide);
-    };
-  }, []);
+  useFlushOnHide(() => {
+    void saveLedgerNow(useLedgerStore.getState());
+  });
 
   const months = useMemo(() => {
     const keys = new Set(transactions.map((t) => monthKey(t.date)));
@@ -289,39 +293,20 @@ export function Dashboard() {
               <ChevronRight />
             </Button>
           </div>
-          <Button
+          <ResponsiveAction
             onClick={() => void resync()}
             disabled={syncing}
-            className="hidden sm:inline-flex"
-          >
-            <RefreshCw className={cn(syncing && "animate-spin")} />
-            {syncing ? "Syncing" : folder ? "Sync" : "Attach folder"}
-          </Button>
-          <Button
-            size="icon"
-            className="sm:hidden"
-            aria-label={syncing ? "Syncing statements" : "Sync statements"}
-            disabled={syncing}
-            onClick={() => void resync()}
-          >
-            <RefreshCw className={cn(syncing && "animate-spin")} />
-          </Button>
-          <Button
+            icon={<RefreshCw className={cn(syncing && "animate-spin")} />}
+            label={syncing ? "Syncing" : folder ? "Sync" : "Attach folder"}
+            mobileLabel={syncing ? "Syncing statements" : "Sync statements"}
+          />
+          <ResponsiveAction
             variant="outline"
             onClick={() => setImportOpen(true)}
-            className="hidden sm:inline-flex"
-          >
-            <Upload /> Import
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            className="sm:hidden"
-            aria-label="Import statements"
-            onClick={() => setImportOpen(true)}
-          >
-            <Upload />
-          </Button>
+            icon={<Upload />}
+            label="Import"
+            mobileLabel="Import statements"
+          />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="icon" aria-label="More">
@@ -456,21 +441,21 @@ export function Dashboard() {
                   aria-label="Search transactions"
                 />
               </div>
-              <select
-                value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
-                className="h-11 rounded-md border border-input bg-card px-3 text-sm shadow-[var(--shadow-border)]"
-                aria-label="Filter by category"
-              >
-                <option value="all">Spending & income</option>
-                <option value="transfers">Transfers</option>
-                <option value="uncat">Uncategorized</option>
-                {cats.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                <SelectTrigger className="sm:w-52" aria-label="Filter by category">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Spending &amp; income</SelectItem>
+                  <SelectItem value="transfers">Transfers</SelectItem>
+                  <SelectItem value="uncat">Uncategorized</SelectItem>
+                  {cats.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           {!detailsReady ? (
@@ -537,6 +522,36 @@ export function Dashboard() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+/** A header action that carries its label on desktop and collapses to an
+ *  icon-only button below the `sm` breakpoint. */
+function ResponsiveAction({
+  icon,
+  label,
+  mobileLabel,
+  ...button
+}: ComponentProps<typeof Button> & {
+  icon: ReactNode;
+  label: string;
+  mobileLabel: string;
+}) {
+  return (
+    <>
+      <Button {...button} className={cn("hidden sm:inline-flex", button.className)}>
+        {icon}
+        {label}
+      </Button>
+      <Button
+        {...button}
+        size="icon"
+        aria-label={mobileLabel}
+        className={cn("sm:hidden", button.className)}
+      >
+        {icon}
+      </Button>
+    </>
   );
 }
 

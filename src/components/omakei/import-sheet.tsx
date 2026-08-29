@@ -27,13 +27,9 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { parseStatementFile } from "@/lib/finance/parse";
-import { parseDroppedFiles } from "@/lib/finance/statements";
+import { mergePreviews, parseDroppedFiles } from "@/lib/finance/statements";
 import { importAndSave } from "@/lib/finance/sync";
-import {
-  ACCOUNT_KIND_LABEL,
-  type AccountKind,
-  type ImportFileResult,
-} from "@/lib/finance/types";
+import { ACCOUNT_KIND_LABEL, type AccountKind, type ImportFileResult } from "@/lib/finance/types";
 import { formatMoney, cn } from "@/lib/utils";
 
 const KINDS: AccountKind[] = ["checking", "savings", "credit", "mortgage", "other"];
@@ -112,8 +108,8 @@ export function ImportSheet({
         <SheetHeader>
           <SheetTitle>Import a one-off file</SheetTitle>
           <SheetDescription>
-            Statements in your attached folder sync on their own. Use this for anything that
-            lives somewhere else. Duplicates are skipped either way.
+            Statements in your attached folder sync on their own. Use this for anything that lives
+            somewhere else. Duplicates are skipped either way.
           </SheetDescription>
         </SheetHeader>
 
@@ -258,14 +254,4 @@ export function ImportSheet({
       </SheetContent>
     </Sheet>
   );
-}
-
-function mergePreviews(prev: ImportFileResult[], next: ImportFileResult[]): ImportFileResult[] {
-  const out = [...prev];
-  for (const item of next) {
-    const idx = out.findIndex((p) => p.filename === item.filename);
-    if (idx >= 0) out[idx] = item;
-    else out.push(item);
-  }
-  return out;
 }
