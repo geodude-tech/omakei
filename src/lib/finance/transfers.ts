@@ -69,7 +69,7 @@ export function isInternalTransfer(
     return ESCROW.test(d);
   }
 
-  return GENERIC_TRANSFER.test(d) && !/payroll|salary|paycheck/.test(d);
+  return GENERIC_TRANSFER.test(d);
 }
 
 export function mortgageCategory(description: string): string | null {

@@ -142,30 +142,6 @@ function compareTx(a: Transaction, b: Transaction): number {
   return a.description.localeCompare(b.description);
 }
 
-export function applyRuleToUncategorized(
-  transactions: Transaction[],
-  rule: CategorizeRule,
-): Transaction[] {
-  return transactions.map((tx) => {
-    if (tx.categoryId) return tx;
-    if (!ruleMatches(rule.pattern, tx.description)) return tx;
-    return { ...tx, categoryId: rule.categoryId };
-  });
-}
-
-export function recategorizeMerchant(
-  transactions: Transaction[],
-  merchant: string,
-  categoryId: string,
-): Transaction[] {
-  const pattern = merchant.trim();
-  if (!pattern) return transactions;
-  return transactions.map((tx) => {
-    if (!ruleMatches(pattern, tx.description)) return tx;
-    return { ...tx, categoryId };
-  });
-}
-
 export function makeUserRule(pattern: string, categoryId: string): CategorizeRule {
   return {
     id: crypto.randomUUID(),

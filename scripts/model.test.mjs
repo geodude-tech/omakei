@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = readFileSync(join(ROOT, "Model.js"), "utf8");
 const Model = new Function(
-  `${src}\nreturn { editorUrl, editorQuery, emptySummary, summarize, parseSetAsides, openEditorCommand, shellQuote, revisionFilePath, parseLedger, parseReaderOutput };`,
+  `${src}\nreturn { editorUrl, editorQuery, emptySummary, summarize, parseSetAsides, openEditorCommand, shellQuote, revisionFilePath, parseLedger, parseReaderOutput, latestMonth, openingMonth };`,
 )();
 
 test("editorUrl carries the month the popup was showing", () => {
@@ -87,6 +87,58 @@ test("summarize totals a month of transactions", () => {
   assert.equal(summary.uncategorized, 1);
   assert.equal(summary.allocated, 100);
   assert.equal(Model.editorQuery(summary), "m=2026-08");
+});
+
+test("latestMonth picks the newest YYYY-MM present, or '' for none", () => {
+  assert.equal(
+    Model.latestMonth([
+      { date: "2026-03-11", amount: 1 },
+      { date: "2026-11-02", amount: 1 },
+      { date: "2026-07-30", amount: 1 },
+    ]),
+    "2026-11",
+  );
+  assert.equal(Model.latestMonth([]), "");
+  assert.equal(Model.latestMonth(null), "");
+});
+
+test("openingMonth stays on this month when it has activity", () => {
+  const ledger = {
+    selectedMonth: "2026-06",
+    transactions: [
+      { date: "2026-08-04", amount: -10 },
+      { date: "2026-06-01", amount: -5 },
+    ],
+  };
+  assert.equal(Model.openingMonth(ledger, new Date(2026, 7, 15)), "2026-08");
+});
+
+test("openingMonth drops back to the last-open month when this month is empty", () => {
+  // Last month's statements dropped in on the 15th; nothing in August yet.
+  const ledger = {
+    selectedMonth: "2026-06",
+    transactions: [
+      { date: "2026-06-01", amount: -5 },
+      { date: "2026-07-20", amount: -8 },
+    ],
+  };
+  assert.equal(Model.openingMonth(ledger, new Date(2026, 7, 15)), "2026-06");
+});
+
+test("openingMonth falls through to the newest month with data", () => {
+  const ledger = {
+    selectedMonth: "2026-01", // recorded, but that month has nothing
+    transactions: [
+      { date: "2026-05-01", amount: -5 },
+      { date: "2026-07-20", amount: -8 },
+    ],
+  };
+  assert.equal(Model.openingMonth(ledger, new Date(2026, 7, 15)), "2026-07");
+});
+
+test("openingMonth stays on this month for an empty or missing ledger", () => {
+  assert.equal(Model.openingMonth({ transactions: [] }, new Date(2026, 7, 15)), "2026-08");
+  assert.equal(Model.openingMonth(null, new Date(2026, 7, 15)), "2026-08");
 });
 
 test("the widget watches the server's revision file, wherever state lives", () => {

@@ -153,25 +153,24 @@ export function Dashboard() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return monthTx.filter((t) => {
-      if (categoryFilter === "all" && isTransferTx(t)) return false;
-      if (categoryFilter === "transfers" && !isTransferTx(t)) return false;
-      if (categoryFilter === "uncat" && t.categoryId) return false;
-      if (
-        categoryFilter !== "all" &&
-        categoryFilter !== "uncat" &&
-        categoryFilter !== "transfers" &&
-        t.categoryId !== categoryFilter
-      ) {
-        return false;
+    const matchesCategory = (t: Transaction) => {
+      switch (categoryFilter) {
+        case "all":
+          return !isTransferTx(t);
+        case "transfers":
+          return isTransferTx(t);
+        case "uncat":
+          return !t.categoryId;
+        default:
+          return t.categoryId === categoryFilter;
       }
-      if (!q) return true;
-      return (
-        t.description.toLowerCase().includes(q) ||
-        t.accountName.toLowerCase().includes(q) ||
-        categoryName(t.categoryId).toLowerCase().includes(q)
-      );
-    });
+    };
+    const matchesQuery = (t: Transaction) =>
+      !q ||
+      t.description.toLowerCase().includes(q) ||
+      t.accountName.toLowerCase().includes(q) ||
+      categoryName(t.categoryId).toLowerCase().includes(q);
+    return monthTx.filter((t) => matchesCategory(t) && matchesQuery(t));
   }, [monthTx, query, categoryFilter]);
 
   const pagedUnknowns = useMemo(

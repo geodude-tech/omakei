@@ -44,7 +44,7 @@ Known merchants are categorized automatically. A transaction with an unknown cat
 
 ## On the bar
 
-- Left click: this month (spend, income, reserved, categories, recent activity)
+- Left click: spend, income, reserved, categories, and recent activity — this month, or the most recent month with activity if this month is still empty
 - Right click: open Omakei
 - Middle click: reload the ledger
 
