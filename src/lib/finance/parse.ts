@@ -226,6 +226,28 @@ function scoreColumn(rows: string[][], col: number, test: (s: string) => boolean
   return n;
 }
 
+/**
+ * The column that scores highest on `metric`, ignoring `exclude`d indices and
+ * any column that scores zero. Ties keep the leftmost. -1 when nothing scores.
+ */
+function pickColumn(
+  colCount: number,
+  exclude: number[],
+  metric: (col: number) => number,
+): number {
+  let best = -1;
+  let bestScore = 0;
+  for (let c = 0; c < colCount; c++) {
+    if (exclude.includes(c)) continue;
+    const score = metric(c);
+    if (score > bestScore) {
+      bestScore = score;
+      best = c;
+    }
+  }
+  return best;
+}
+
 function mapCsvRows(grid: string[][], filename: string): ImportFileResult {
   const warnings: string[] = [];
   if (grid.length === 0) {
@@ -248,43 +270,15 @@ function mapCsvRows(grid: string[][], filename: string): ImportFileResult {
   const debitCol = hasHeader ? findHeader(headers, DEBIT_HEADERS) : -1;
   const creditCol = hasHeader ? findHeader(headers, CREDIT_HEADERS) : -1;
   if (dateCol < 0) {
-    let best = -1;
-    let bestScore = 0;
-    for (let c = 0; c < colCount; c++) {
-      const score = scoreColumn(sample, c, looksLikeDate);
-      if (score > bestScore) {
-        bestScore = score;
-        best = c;
-      }
-    }
-    dateCol = best;
+    dateCol = pickColumn(colCount, [], (c) => scoreColumn(sample, c, looksLikeDate));
   }
   if (amountCol < 0 && debitCol < 0 && creditCol < 0) {
-    let best = -1;
-    let bestScore = 0;
-    for (let c = 0; c < colCount; c++) {
-      if (c === dateCol) continue;
-      const score = scoreColumn(sample, c, looksLikeAmount);
-      if (score > bestScore) {
-        bestScore = score;
-        best = c;
-      }
-    }
-    amountCol = best;
+    amountCol = pickColumn(colCount, [dateCol], (c) => scoreColumn(sample, c, looksLikeAmount));
   }
   if (descCol < 0) {
-    let best = -1;
-    let bestLen = 0;
-    for (let c = 0; c < colCount; c++) {
-      if (c === dateCol || c === amountCol || c === debitCol || c === creditCol) continue;
-      let len = 0;
-      for (const row of sample) len += (row[c] ?? "").length;
-      if (len > bestLen) {
-        bestLen = len;
-        best = c;
-      }
-    }
-    descCol = best;
+    descCol = pickColumn(colCount, [dateCol, amountCol, debitCol, creditCol], (c) =>
+      sample.reduce((len, row) => len + (row[c] ?? "").length, 0),
+    );
   }
   if (dateCol < 0 || descCol < 0 || (amountCol < 0 && debitCol < 0 && creditCol < 0)) {
     warnings.push("Could not detect date, description, and amount columns.");
