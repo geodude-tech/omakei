@@ -1,7 +1,10 @@
 # Spec: Categorization
 
-_Status: **forward spec** — target behavior, not yet built. Traces to
-`docs/intent/omakei.md`, which takes precedence._
+_Status: mostly implemented as of 2026-08-28 (branch `worktree-categorization-spec`).
+Started as a forward spec; the engine tests, the `loadSnapshot` re-derive, the
+`omakei-categorize.mjs` write path, and the truthful `RulesSheet` copy have
+landed. Open Questions 1, 4, and 5 remain. Traces to `docs/intent/omakei.md`,
+which takes precedence._
 
 ## Objective
 
@@ -54,17 +57,18 @@ is here, everything before it is statement-import.
 - `scripts/check-no-personal-data` stays green — no household merchant in
   `DEFAULT_PATTERNS`.
 
-## What changes from today
+## What changed
 
-| Area | Today | Target |
+| Area | Was | Now |
 |---|---|---|
-| Agent rule-authoring | An agent can write the file, but nothing documents the rule shape, when it takes effect, or the race with an open editor. | A written contract in `docs/ledger.md`: rule shape, "close the editor first," takes effect on next load + sync. |
-| Engine tests | None direct; incidental coverage via `transfers.test.ts`. | `ledger.test.ts` covers `assignCategory` precedence, `bestMatchingRule` ranking, `upsertRule` idempotency, `refreshCategories` null-preservation. |
-| `RulesSheet` regex claim | "Wrap a pattern in /slashes/ to use a regex" — but no add form exists anywhere in the app. | The sentence goes, or it points at the agent / JSON path as where regex rules come from. |
-| Guess vs. confirmed | A default guess and a hand-set category are indistinguishable in the ledger. | Decided in Open Question 1 — whether a `confirmedAt` marker earns its ledger-shape change. |
+| Agent rule-authoring | An agent could write the file, but nothing documented the rule shape, when it takes effect, or the race with an open editor. | `scripts/omakei-categorize.mjs` (add / `--remove` / `--list` / `--dry-run`): writes the rule, re-derives with the shipped engine, bumps the bar revision. Contract in `docs/ledger.md`. |
+| Rules applied on load | `loadSnapshot` stored `categoryId` verbatim; a rule added since the last save only took effect on the next import or folder sync. | `loadSnapshot` runs `refreshCategories`, so opening the editor applies new rules — folder or not. |
+| Engine tests | None direct; incidental coverage via `transfers.test.ts`. | `ledger.test.ts` covers `assignCategory` precedence, the longest-identifier / newer-`createdAt` ranking, `upsertRule` idempotency, `refreshCategories` null-preservation; `store.test.ts` covers the load re-derive. |
+| `RulesSheet` regex claim | "Wrap a pattern in /slashes/ to use a regex" — but no add form exists anywhere in the app. | Copy describes only what the sheet does (view / delete) and points at `omakei-categorize.mjs` for bulk edits and regex. |
+| Guess vs. confirmed | A default guess and a hand-set category are indistinguishable in the ledger. | Unchanged — Open Question 1, deferred. |
 
 **Not in scope:** a rule editor in the app, user-editable categories, sub-categories,
-per-transaction overrides that aren't backed by a merchant rule.
+per-transaction overrides that aren't backed by a merchant rule (Open Question 5).
 
 ## Tech Stack
 
@@ -96,10 +100,14 @@ src/components/omakei/needs-category.tsx   → the uncategorized-merchant list +
 src/components/omakei/category-select.tsx  → the grouped category dropdown
 src/components/omakei/rules-sheet.tsx      → view / delete user rules
 src/components/omakei/transaction-row.tsx  → per-row category dropdown
+scripts/omakei-categorize.mjs   → terminal CLI: add / --remove / --list / --dry-run a user rule, re-derive, bump the bar
+scripts/ledger-api.mjs          → exports writeAtomic() and bumpRevisionAt(stateDir), used by the CLI to write like the server does
 ```
 
-New: `src/lib/finance/ledger.test.ts`. Docs touched: `docs/ledger.md` (add the
-write contract), `docs/spec/README.md` (add the row).
+Tests: `src/lib/finance/ledger.test.ts`, `src/lib/finance/store.test.ts`,
+`scripts/omakei-categorize.test.mjs`, plus the `extractMerchant` corpus in
+`fingerprint.test.ts`. Docs: `docs/ledger.md` "Writing back" section,
+`docs/spec/README.md` row.
 
 ## Code Style
 
@@ -148,25 +156,21 @@ Conventions:
 `node --experimental-strip-types --test` on the `.ts` modules; the `.tsx`
 surfaces are checked by hand.
 
-- **`ledger.test.ts` (new):**
-  - `assignCategory` — user rule beats default; transfer detection beats default;
-    mortgage category beats default; no match → `null`; a default match still
-    resolves when `accountKind` is absent.
-  - `bestMatchingRule` — longest identifier wins within `"user"`; `createdAt`
-    descending breaks a length tie; the `source` filter is honored.
-  - `upsertRule` — a second call for the same lowercased pattern updates the
-    category in place and adds no row; a new pattern prepends.
-  - `refreshCategories` — a `null` stays `null` when nothing matches; adding a
-    rule re-tags history; removing a rule reverts affected rows to their
-    default or `null`.
-- **`fingerprint.test.ts` (extend):** `extractMerchant` against a table of
-  real-shape bank lines (national chains only), asserting the grouping key the
-  "Needs a category" list would build a rule from.
+- **`ledger.test.ts`:** `assignCategory`'s four-step precedence (user rule /
+  structural transfer / mortgage / default / `null`); the longest-identifier and
+  newer-`createdAt` ranking (exercised through `assignCategory`, since
+  `bestMatchingRule` is unexported); `upsertRule` idempotency and whitespace
+  distinctness; `refreshCategories` preserving `null`, re-tagging on a new rule,
+  reverting on removal, and being idempotent on already-derived rows.
+- **`store.test.ts`:** `loadSnapshot` re-derives from the snapshot's rules, and
+  falls back to the defaults when none are stored.
+- **`omakei-categorize.test.mjs`:** the CLI end to end against a throwaway
+  ledger — add, idempotent re-run, `--remove`, `--dry-run` (byte-identical
+  file), `--list`, unknown category, no attached folder.
+- **`fingerprint.test.ts`:** an `extractMerchant` corpus of real-shape bank
+  lines; four cases are marked `WRONG` and tracked in `tasks/plan.md` (OQ4).
 - **`ledger-contract.test.ts` (existing):** still guards `CATEGORIES` against
   `docs/ledger.md`.
-- **End-to-end, by hand:** append a well-formed rule to an isolated
-  `omakei-ledger.json`, run `npm run dev:isolated`, confirm the matching rows
-  show the new category and a second sync does not change them.
 
 A new `DEFAULT_PATTERNS` entry needs a `fingerprint.test.ts` or `ledger.test.ts`
 case if the match isn't obvious.
@@ -202,18 +206,18 @@ case if the match isn't obvious.
 
 ## Success Criteria
 
-1. `ledger.test.ts` exists and asserts the four-step precedence, longest-identifier
-   ranking, `upsertRule` idempotency, and `null` preservation.
-2. Appending a well-formed rule to an isolated ledger and running
-   `npm run dev:isolated` re-tags every matching transaction; a second sync is a
-   no-op on those rows.
-3. `docs/ledger.md` documents the agent write path: rule shape, the "editor
-   closed" constraint, and when it takes effect.
-4. `RulesSheet` copy matches the affordances that actually exist.
-5. `npm test`, `npm run typecheck`, `npm run lint`, `npm run build` all green;
-   `dist/` rebuilt from the final source.
-6. `categoryName`, the `CATEGORIES` table, and `docs/ledger.md` still agree
-   (`ledger-contract.test.ts`).
+1. **Met.** `ledger.test.ts` + `store.test.ts` assert the four-step precedence,
+   the identifier/`createdAt` ranking, `upsertRule` idempotency, `null`
+   preservation, and the load re-derive.
+2. **Met.** `omakei-categorize.test.mjs`: `omakei-categorize.mjs "<pattern>"
+   <id>` against a ledger re-tags every matching row and re-running is a no-op.
+3. **Met.** `docs/ledger.md` "Writing back" documents the rule shape, the tool,
+   regex support, the re-derive, and the editor-closed constraint.
+4. **Met.** `RulesSheet` copy describes view/delete only and points at the CLI.
+5. **Met.** `npm test` (163), `npm run typecheck`, `npm run lint` (one
+   pre-existing `button.tsx` warning), `npm run build` all green; `dist/` rebuilt.
+6. **Met.** `ledger-contract.test.ts` still green — `CATEGORIES` and
+   `docs/ledger.md` agree.
 
 ## Open Questions
 
@@ -225,27 +229,27 @@ case if the match isn't obvious.
    `Model.js`, `docs/ledger.md`) for a benefit that may not be felt until the
    agent loop is real. **Leaning: defer until an agent actually asks for it.**
 
-2. **The open-editor race.** The agent writes `omakei-ledger.json`; if a tab is
-   open, the app's memory is authoritative and the next debounced save (32 ms
-   after any edit) clobbers the agent's rule. "Close the editor first" is the
-   boring answer. A `scripts/omakei-categorize.mjs` that adds a rule and
-   re-derives — it can import the shipped `DEFAULT_PATTERNS` directly — would be
-   safer and scriptable, but that is a Plan-phase call, not a spec commitment.
+2. ~~**The open-editor race.**~~ _Resolved 2026-08-28._ `omakei-categorize.mjs`
+   ships and re-derives with the real engine; `docs/ledger.md` documents "run it
+   with the editor closed, reload the tab after." A live push into an open tab
+   would need a server round-trip on the render path — a `dashboard-app.md`
+   "ask first" — and stays a non-goal.
 
-3. **`refreshCategories` does not run on plain `loadSnapshot`.** It runs on
-   import and sync. With a folder attached — the normal case — boot syncs, so an
-   agent's rule lands. With no folder attached (manual imports only) the rule
-   sits inert until the next manual import. Acceptable, or should `loadSnapshot`
-   re-derive?
+3. ~~**`refreshCategories` does not run on plain `loadSnapshot`.**~~ _Resolved
+   2026-08-28._ It does now, so an agent's rule lands on the next editor open
+   whether or not a folder is attached.
 
-4. **`extractMerchant` is the ceiling on the "Needs a category" list.** ~60 lines
-   of stacked heuristics, no direct tests. If it groups two merchants under one
-   key, one assignment mis-categorizes both; if it splits one merchant, the user
-   assigns twice. A test corpus would bound the damage; a rewrite is out of scope
-   here.
+4. **`extractMerchant` is the ceiling on the "Needs a category" list.** The
+   corpus in `fingerprint.test.ts` now pins its output and flags four wrong
+   keys (drops the distinguishing word; splits Amazon; keeps a per-transaction
+   code; misses the `DEBIT CARD PURCHASE` prefix). A `PREFIXES` entry and a
+   trailing-`*CODE` strip are small follow-ups; the "drops the distinguishing
+   word" behavior needs its own look. Not done here — see `tasks/plan.md`.
 
 5. **`transaction-row.tsx` always writes a merchant rule**
    (`categorizeOne(id, cat, true)`). There is no "just this one" — every
-   correction in the activity table is permanent and merchant-wide. Given "lean
-   on the agent," is that acceptable, or does the honest per-row fix need
-   `always=false` wired to something (a modifier key, a second menu item)?
+   correction in the activity table is permanent and merchant-wide. _Decided
+   2026-08-28: leave the behavior, document it (the `RulesSheet` copy names the
+   CLI for finer edits); do not add a per-transaction override — it would need a
+   `source:"manual-tx"` ledger concept the "lean on the agent" direction rules
+   out._

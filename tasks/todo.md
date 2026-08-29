@@ -3,7 +3,15 @@
 Plan: `tasks/plan.md`. Spec: `docs/spec/categorization.md`. Work top to bottom;
 stop at each checkpoint for review. One commit per task.
 
-Status: NOT STARTED — awaiting plan approval.
+Status: COMPLETE — all 7 tasks landed on `worktree-categorization-spec`.
+`npm test` 163 pass (70 script + 93 src), typecheck clean, lint shows only the
+pre-existing `button.tsx` warning, `npm run build` green. Checkpoints A–D met;
+the checkpoint review gates were waived by the user ("proceed, and yes to all
+three"). Live `dev:isolated` browser check not run — the CLI is covered end to
+end by `omakei-categorize.test.mjs` and `loadSnapshot` by `store.test.ts`.
+
+Findings recorded for follow-up (not fixed): four `extractMerchant` mis-groupings
+(spec OQ4, `tasks/plan.md`).
 
 ---
 

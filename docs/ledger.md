@@ -144,6 +144,42 @@ payment and one savings sweep per month), for `2026-08`:
 The naive column applies none of the rules above. The net is close enough to pass
 a sanity check; the two figures it is derived from are not.
 
+## Writing back: categorize rules
+
+Everything above is about reading. One thing is safe to write from outside the
+app — the user's categorize rules — and there is a tool for it:
+
+```
+scripts/omakei-categorize.mjs <pattern> <category-id>   add or update a rule
+scripts/omakei-categorize.mjs --remove <pattern>        drop a rule
+scripts/omakei-categorize.mjs --list                    merchants with no category yet
+scripts/omakei-categorize.mjs --dry-run <pattern> <id>  show the effect, write nothing
+```
+
+A `<pattern>` is a key identifier (`safeway`), not the whole bank line, matched
+the way the app matches — case-insensitive, town and store number ignored. Wrap
+it in `/slashes/` for a regex. `<category-id>` is one of the ids in the table
+above.
+
+```jsonc
+// a CategorizeRule, as it sits in `rules[]`
+{ "id": "…", "pattern": "safeway", "categoryId": "groceries", "createdAt": 1724800000000, "source": "user" }
+```
+
+The tool does three things: writes the rule (only `source: "user"` rules
+persist — the defaults ship in the build), re-derives every transaction's
+`categoryId` with the same engine the app uses, and bumps the revision file the
+bar watches. That last step is why the popup updates without opening the editor.
+
+**Do not hand-edit a `categoryId` without a rule behind it.** The app re-derives
+on every load and every folder sync (`refreshCategories`), so an unbacked
+category is overwritten on the next one. Change categories by changing rules.
+
+**Run it with the editor closed.** An open editor tab holds the ledger in memory
+and writes the whole file back on its next edit, which would clobber a
+concurrent change. If the editor is open, reload the tab afterwards to pick the
+new rules up.
+
 ## Pinning the answer
 
 When an answer is worth seeing every day, it becomes a panel: one file in

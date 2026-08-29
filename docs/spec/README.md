@@ -8,8 +8,9 @@ The first two were written before the code and are marked _implemented_. Most of
 the rest were written after, to capture existing behavior against the intent; they
 are marked _documents existing behavior_ and each carries an **Open Questions**
 section listing behavior that looks wrong or underspecified — none of it acted on
-yet. One — [categorization.md](categorization.md) — is a _forward spec_: target
-behavior not yet built, to be planned against.
+yet. One — [categorization.md](categorization.md) — started as a _forward spec_
+(target behavior, then built): engine tests, the load-time re-derive, and the
+`omakei-categorize.mjs` write path landed against it.
 
 | Capability | Spec | Depends on | Reads for the loop |
 |---|---|---|---|
