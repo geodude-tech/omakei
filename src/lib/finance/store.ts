@@ -4,7 +4,6 @@ import { mergeImport, refreshCategories, seedRules, upsertRule } from "./ledger.
 import { scheduleLedgerSave } from "./ledger-file.ts";
 import { makeSetAside, parseSetAsides } from "./set-asides.ts";
 import type {
-  AccountKind,
   CategorizeRule,
   ImportFileResult,
   ImportSummary,
@@ -39,10 +38,6 @@ interface LedgerState {
   updateSetAside: (id: string, patch: { name?: string; amount?: number }) => void;
   removeSetAside: (id: string) => void;
   clearLedger: () => void;
-  updateAccount: (
-    filename: string,
-    patch: { accountName?: string; accountKind?: AccountKind },
-  ) => void;
 }
 
 export function currentMonthKey(): string {
@@ -133,15 +128,6 @@ export const useLedgerStore = create<LedgerState>()((set, get) => ({
 
   clearLedger: () =>
     set({ transactions: [], initialized: true, selectedMonth: currentMonthKey() }),
-
-  updateAccount: (filename, patch) => {
-    set({
-      transactions: refreshCategories(
-        get().transactions.map((t) => (t.sourceFile === filename ? { ...t, ...patch } : t)),
-        get().rules,
-      ),
-    });
-  },
 }));
 
 useLedgerStore.subscribe((state) => {

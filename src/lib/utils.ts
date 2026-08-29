@@ -17,12 +17,6 @@ export function cn(
   return twMerge(classes.join(" "));
 }
 
-export function waitPaint(): Promise<void> {
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-  });
-}
-
 export function formatMoney(
   n: number,
   opts?: { sign?: boolean; abs?: boolean },

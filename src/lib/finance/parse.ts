@@ -1,4 +1,3 @@
-import { fingerprint } from "./fingerprint.ts";
 import type { AccountKind, ImportFileResult, ParsedRow } from "./types.ts";
 
 const DATE_HEADERS = [
@@ -369,8 +368,4 @@ export function parseStatementFile(filename: string, text: string): ImportFileRe
     result = mapCsvRows(parseDelimited(trimmed), filename);
   }
   return applyKindSign(result);
-}
-
-export function parsedToPreviewKey(row: ParsedRow): string {
-  return fingerprint(row.date, row.amount, row.description);
 }
