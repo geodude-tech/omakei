@@ -68,9 +68,13 @@ export const useLedgerStore = create<LedgerState>()((set, get) => ({
   },
 
   loadSnapshot: (snapshot) => {
+    // Re-derive on load, not just on import: a rule added to the ledger since
+    // the last save (by hand, or by scripts/omakei-categorize.mjs) then applies
+    // as soon as the editor opens, with or without an attached folder.
+    const rules = snapshot.rules.length > 0 ? snapshot.rules : seedRules();
     set({
-      transactions: snapshot.transactions,
-      rules: snapshot.rules.length > 0 ? snapshot.rules : seedRules(),
+      transactions: refreshCategories(snapshot.transactions, rules),
+      rules,
       ...(snapshot.setAsides !== undefined
         ? { setAsides: parseSetAsides(snapshot.setAsides) }
         : {}),

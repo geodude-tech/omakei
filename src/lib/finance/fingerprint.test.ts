@@ -42,6 +42,56 @@ test("ruleMatches uses whole tokens so a city prefix does not steal payroll", ()
   assert.equal(ruleMatches("kroger", "ACME CORP PAYROLL       ACH"), false);
 });
 
+/**
+ * `extractMerchant` is the grouping key the "Needs a category" list buckets by,
+ * and the string `categorizeMerchant` turns into a rule pattern. This table
+ * pins its current output against real-shape statement lines. Cases marked
+ * `WRONG` produce a key that is too broad, too narrow, or split across two
+ * spellings of one merchant — recorded here, tracked in `tasks/plan.md`, not
+ * fixed in this pass.
+ */
+test("extractMerchant grouping key — corpus", () => {
+  const corpus: Array<[string, string, string?]> = [
+    ["WHOLE FDS MKT 10456 AUSTIN TX", "WHOLE FDS"],
+    ["POS DEBIT WHOLE FOODS MKT 10456 AUSTIN TX", "WHOLE FOODS"],
+    ["CHECKCARD 0412 SHELL OIL 57444 DENVER CO", "SHELL OIL"],
+    ["SQ *SUNRISE BAKERY SEATTLE WA", "SUNRISE", "WRONG: drops BAKERY; rule 'sunrise' is too broad"],
+    ["TST* THE LOCAL DINER PORTLAND OR", "THE LOCAL DINER"],
+    ["PAYPAL *SPOTIFY USA 4029357733 CA", "SPOTIFY"],
+    ["COSTCO WHSE #0421 SEATTLE WA", "COSTCO"],
+    ["76 - CIRCLE K 2093 BOISE ID", "76"],
+    ["NETFLIX.COM 866-579-7172 CA", "NETFLIX.COM"],
+    ["STARBUCKS STORE 09876 SAN JOSE CA", "STARBUCKS"],
+    ["CHEVRON 0092345 SACRAMENTO CA", "CHEVRON"],
+    ["THE HOME DEPOT #6161 ATLANTA GA", "THE HOME DEPOT"],
+    ["WM SUPERCENTER #1234 DALLAS TX", "WM SUPERCENTER"],
+    ["PURCHASE AUTHORIZED ON 04/12 DUTCH BROS 888 BOISE ID", "DUTCH BROS"],
+    [
+      "TRADER JOE'S #123 PORTLAND OR",
+      "TRADER",
+      "WRONG: drops JOE'S; rule 'trader' is too broad",
+    ],
+    [
+      "AMZN MKTP US*2A4XY SEATTLE WA",
+      "AMZN MKTP",
+      "WRONG: splits from AMAZON.COM below — two keys for one merchant",
+    ],
+    [
+      "AMAZON.COM*RT4G12 AMZN.COM/BILL WA",
+      "AMAZON.COM*RT4G12",
+      "WRONG: keeps the per-transaction code; rule matches exactly one row",
+    ],
+    [
+      "DEBIT CARD PURCHASE TARGET T-1234 CHICAGO IL",
+      "PURCHASE",
+      "WRONG: 'DEBIT CARD PURCHASE' prefix not stripped; rule 'purchase' matches everything",
+    ],
+  ];
+  for (const [input, expected] of corpus) {
+    assert.equal(extractMerchant(input), expected, input);
+  }
+});
+
 test("extractMerchant strips card prefixes, cities, and groups chains", () => {
   assert.equal(extractMerchant("KROGER #70 SEATTLE WA"), "KROGER");
   assert.equal(extractMerchant("KROGER SUPERMARKE SEATTLE WA"), "KROGER");

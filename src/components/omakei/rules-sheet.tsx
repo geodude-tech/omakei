@@ -28,9 +28,12 @@ export function RulesSheet({
         <SheetHeader>
           <SheetTitle>Auto-categorize rules</SheetTitle>
           <SheetDescription>
-            Each rule is a key identifier, not the whole bank line. Matching is
-            case-insensitive and ignores town and store number — <span className="font-mono">safeway</span> hits
-            every Safeway. Wrap a pattern in /slashes/ to use a regex.
+            The rules you've made by giving an uncategorized merchant a category.
+            Each is a key identifier, not the whole bank line — matching ignores
+            town and store number, so <span className="font-mono">safeway</span> hits
+            every Safeway. Delete one to stop it applying. Bulk edits and regex
+            patterns are a terminal job —{" "}
+            <span className="font-mono">scripts/omakei-categorize.mjs</span>.
           </SheetDescription>
         </SheetHeader>
         <ScrollArea className="min-h-0 flex-1">

@@ -212,7 +212,7 @@ export async function readCapped(path, max) {
  * The data is flushed before the rename, so the file the rename publishes is
  * the whole file rather than whatever reached disk first.
  */
-async function writeAtomic(path, text) {
+export async function writeAtomic(path, text) {
   const dir = dirname(path);
   const tmp = join(dir, `.${basename(path)}.${randomBytes(8).toString("hex")}.tmp`);
   let fh;
@@ -226,6 +226,38 @@ async function writeAtomic(path, text) {
   } catch (err) {
     await unlink(tmp).catch(() => {});
     throw err;
+  } finally {
+    await fh?.close().catch(() => {});
+  }
+}
+
+/**
+ * Touch the file the bar widget watches.
+ *
+ * The widget cannot watch the ledger: doing that safely means bounding what it
+ * reads, and QML has no way to bound a read. So it watches this instead and
+ * never reads it -- the token is only here to make the file change. The write
+ * is in place rather than through a rename because nothing depends on it being
+ * atomic, and O_NOFOLLOW keeps it consistent with every other write this module
+ * makes.
+ *
+ * A failure here costs a live refresh, not a save, so it is swallowed: the
+ * widget still re-reads when the panel is opened. Callers that write the ledger
+ * outside the server (`omakei-categorize.mjs`) call this so the bar still
+ * updates.
+ */
+export async function bumpRevisionAt(stateDir) {
+  let fh;
+  try {
+    await mkdir(stateDir, { recursive: true });
+    fh = await open(
+      join(stateDir, REVISION_FILENAME),
+      FS.O_WRONLY | FS.O_CREAT | FS.O_TRUNC | FS.O_NOFOLLOW,
+      0o600,
+    );
+    await fh.writeFile(`${Date.now()}\n`, "utf8");
+  } catch {
+    /* nothing the user can do about it, and nothing that should fail a save */
   } finally {
     await fh?.close().catch(() => {});
   }
@@ -302,31 +334,7 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
     await bumpRevision();
   }
 
-  /**
-   * Touch the file the bar widget watches.
-   *
-   * The widget cannot watch the ledger: doing that safely means bounding what
-   * it reads, and QML has no way to bound a read. So it watches this instead
-   * and never reads it -- the token is only here to make the file change. The
-   * write is in place rather than through a rename because nothing depends on
-   * it being atomic, and O_NOFOLLOW keeps it consistent with every other write
-   * this module makes.
-   *
-   * A failure here costs a live refresh, not a save, so it is swallowed: the
-   * widget still re-reads when the panel is opened.
-   */
-  async function bumpRevision() {
-    let fh;
-    try {
-      await mkdir(stateDir, { recursive: true });
-      fh = await open(revisionPath, FS.O_WRONLY | FS.O_CREAT | FS.O_TRUNC | FS.O_NOFOLLOW, 0o600);
-      await fh.writeFile(`${Date.now()}\n`, "utf8");
-    } catch {
-      /* nothing the user can do about it, and nothing that should fail a save */
-    } finally {
-      await fh?.close().catch(() => {});
-    }
-  }
+  const bumpRevision = () => bumpRevisionAt(stateDir);
 
   async function readLedger(dir) {
     // A ledger larger than the cap is refused on the way in as well as on the
