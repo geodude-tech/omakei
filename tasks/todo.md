@@ -1,5 +1,23 @@
 # Todo: Front-page drop zone for a fresh run
 
+## Status: COMPLETE (branch `front-page-drop-zone`)
+
+All 8 tasks landed, one commit each (37b8183 plan → aa00448 specs). `npm test`
+(82 + 62), `npm run typecheck`, `npm run build` all green; `npm run lint` shows
+only the one pre-existing `button.tsx` warning (untouched by this branch).
+
+Live-app checks done (isolated dev server): empty-state dropzone renders with the
+right copy in both folder states; a dropped file imports on the spot — parsed,
+default-categorized, merged, written to `omakei-ledger.json`, totals correct, no
+console errors; header shows no attach button, "Sync" only with a folder.
+Not visually exercised (covered by unit tests + code review): a real
+entries-API folder drag, and the toast text itself.
+
+Task 8 folded per the build note below — `dist/` was rebuilt in every
+source-touching commit, so there is no separate build commit.
+
+---
+
 Plan: `tasks/plan.md`. Work top to bottom; stop at each checkpoint for review.
 
 Open questions all resolved (2026-08-28): PR #5 merged (no conflict);
@@ -258,7 +276,7 @@ button goes away)
 
 ---
 
-## Task 8: Rebuild and commit `dist/`
+## Task 8: Final verification pass — DONE (dist rebuilt per-task; no separate commit)
 
 **Description:** `src/` changed, so `dist/` must be rebuilt and committed or the
 pre-commit `check-dist-fresh` hook fails and installers ship stale UI.
