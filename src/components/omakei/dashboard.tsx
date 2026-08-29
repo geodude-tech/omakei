@@ -58,11 +58,13 @@ import { isTransferTx } from "@/lib/finance/transfers";
 import { bootLedger } from "@/lib/finance/boot";
 import { saveLedgerNow, setLedgerWritable } from "@/lib/finance/ledger-file";
 import { attachFolder, detachFolder, writeLedger, type AttachedFolder } from "@/lib/finance/server";
-import { syncAttachedFolder, toastSync } from "@/lib/finance/sync";
+import { importAndSave, syncAttachedFolder, toastImport, toastSync } from "@/lib/finance/sync";
+import { parseDroppedFiles } from "@/lib/finance/statements";
 import { clearOpeningMonthFromUrl } from "@/lib/finance/opening-month";
 import { unknownMerchants, useLedgerStore } from "@/lib/finance/store";
 import type { Transaction } from "@/lib/finance/types";
 import { FolderPicker } from "@/components/omakei/folder-picker";
+import { StatementDropzone } from "@/components/omakei/statement-dropzone";
 import { pageSlice } from "@/lib/paginate";
 import { trailingCellSpan } from "@/lib/grid";
 import { useFlushOnHide } from "@/lib/use-flush-on-hide";
@@ -100,6 +102,7 @@ export function Dashboard() {
   const [home, setHome] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   useLayoutEffect(() => {
     if (!initialized) return;
@@ -204,13 +207,27 @@ export function Dashboard() {
     toast.success("Downloaded one clean ledger file");
   }
 
-  /** Re-read the attached folder, or ask for one if none is attached yet. */
-  async function resync() {
-    if (syncing) return;
-    if (!folder) {
-      setPickerOpen(true);
-      return;
+  /** One-off import from the empty-state drop zone: parse, merge, save, toast. */
+  async function importDropped(files: File[]) {
+    if (importing) return;
+    setImporting(true);
+    try {
+      const parsed = await parseDroppedFiles(files);
+      if (parsed.length === 0) {
+        toast.message("No OFX, QFX, or CSV statements in that drop");
+        return;
+      }
+      toastImport(await importAndSave(parsed));
+    } catch {
+      toast.error("Could not read those files");
+    } finally {
+      setImporting(false);
     }
+  }
+
+  /** Re-read the attached folder and merge anything new. */
+  async function resync() {
+    if (syncing || !folder) return;
     setSyncing(true);
     try {
       toastSync(await syncAttachedFolder(folder.name));
@@ -293,13 +310,15 @@ export function Dashboard() {
               <ChevronRight />
             </Button>
           </div>
-          <ResponsiveAction
-            onClick={() => void resync()}
-            disabled={syncing}
-            icon={<RefreshCw className={cn(syncing && "animate-spin")} />}
-            label={syncing ? "Syncing" : folder ? "Sync" : "Attach folder"}
-            mobileLabel={syncing ? "Syncing statements" : "Sync statements"}
-          />
+          {folder ? (
+            <ResponsiveAction
+              onClick={() => void resync()}
+              disabled={syncing}
+              icon={<RefreshCw className={cn(syncing && "animate-spin")} />}
+              label={syncing ? "Syncing" : "Sync"}
+              mobileLabel={syncing ? "Syncing statements" : "Sync statements"}
+            />
+          ) : null}
           <ResponsiveAction
             variant="outline"
             onClick={() => setImportOpen(true)}
@@ -337,26 +356,26 @@ export function Dashboard() {
 
       <main className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 pb-16 sm:px-6 sm:py-8">
         {transactions.length === 0 ? (
-          <button
-            type="button"
-            onClick={() => void resync()}
-            disabled={syncing}
-            className="flex flex-col items-center gap-3 rounded-xl bg-card px-6 py-14 text-center shadow-[var(--shadow-border)] transition-colors hover:bg-muted/40"
-          >
-            <Upload className="size-6 text-primary" />
-            <span className="font-display text-xl font-medium tracking-tight">
-              {syncing
-                ? "Syncing…"
-                : folder
-                  ? "No transactions yet"
-                  : "Choose a folder of statements"}
-            </span>
-            <span className="max-w-md text-sm text-muted-foreground">
-              {folder
-                ? `Drop OFX, QFX, or CSV exports into ${folder.name} and sync again.`
-                : "OFX, QFX, or CSV from your bank. Omakei writes the ledger into that folder and the bar picks it up on its own."}
-            </span>
-          </button>
+          <section className="flex flex-col items-center gap-4 rounded-xl bg-card px-6 py-12 text-center shadow-[var(--shadow-border)]">
+            <div className="flex flex-col gap-1">
+              <span className="font-display text-xl font-medium tracking-tight">
+                {folder ? "No transactions yet" : "Start with your statements"}
+              </span>
+              <span className="max-w-md text-sm text-muted-foreground">
+                {folder
+                  ? `Drop exports here, or add them to ${folder.name} and hit Sync.`
+                  : "OFX, QFX, or CSV exports from your bank — drop the whole folder if that is how you keep them."}
+              </span>
+            </div>
+            <StatementDropzone
+              onFiles={(files) => void importDropped(files)}
+              disabled={importing || syncing}
+              className="w-full max-w-md"
+              label={
+                importing ? "Importing…" : "Drop statements or a folder, or click to choose files"
+              }
+            />
+          </section>
         ) : null}
         <section className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border shadow-[var(--shadow-border)] md:grid-cols-4">
           <Stat label="Spent" value={formatMoney(stats.spent)} tone="spend" />

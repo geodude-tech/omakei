@@ -52,15 +52,27 @@ export function parseStatementAtPath(path: string, text: string): ImportFileResu
   return parsed;
 }
 
-function relativeFilePath(file: File): string {
-  const rel = file.webkitRelativePath?.replace(/\\/g, "/").replace(/^\//, "");
-  return rel || file.name;
+/**
+ * The path a dropped file should be imported under.
+ *
+ * A file dragged in loose has no relative path — its name is the whole story.
+ * A file that arrived as part of a folder (a dropped directory, or a
+ * `webkitdirectory` picker) carries `Container/Sub/file.csv`, where the first
+ * segment is the folder the user picked, not a category. Drop that segment so a
+ * `Credit/` or `Mortgage/` subfolder lands in the position `kindFromLocalPath`
+ * reads — the same position the server hands over for an attached folder.
+ */
+export function droppedStatementPath(relativePath: string, name: string): string {
+  const rel = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!rel) return name;
+  const parts = rel.split("/").filter(Boolean);
+  return parts.length > 1 ? parts.slice(1).join("/") : (parts[0] ?? name);
 }
 
 export async function parseDroppedFiles(files: File[]): Promise<ImportFileResult[]> {
   const out: ImportFileResult[] = [];
   for (const file of files) {
-    const path = relativeFilePath(file);
+    const path = droppedStatementPath(file.webkitRelativePath ?? "", file.name);
     if (!isStatementFileName(path)) continue;
     out.push(parseStatementAtPath(path, await file.text()));
   }
