@@ -62,7 +62,7 @@ import { importAndSave, syncAttachedFolder, toastImport, toastSync } from "@/lib
 import { parseDroppedFiles } from "@/lib/finance/statements";
 import { clearOpeningMonthFromUrl } from "@/lib/finance/opening-month";
 import { unknownMerchants, useLedgerStore } from "@/lib/finance/store";
-import type { Transaction } from "@/lib/finance/types";
+import type { ImportFileResult, Transaction } from "@/lib/finance/types";
 import { FolderPicker } from "@/components/omakei/folder-picker";
 import { StatementDropzone } from "@/components/omakei/statement-dropzone";
 import { pageSlice } from "@/lib/paginate";
@@ -103,6 +103,9 @@ export function Dashboard() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [importing, setImporting] = useState(false);
+  // A fresh-run drop, parsed and held while the user picks a folder to keep the
+  // ledger in — there is nowhere to save it until then.
+  const [pendingImport, setPendingImport] = useState<ImportFileResult[] | null>(null);
 
   useLayoutEffect(() => {
     if (!initialized) return;
@@ -207,7 +210,12 @@ export function Dashboard() {
     toast.success("Downloaded one clean ledger file");
   }
 
-  /** One-off import from the empty-state drop zone: parse, merge, save, toast. */
+  /**
+   * A drop on the empty-state zone: parse, then either save straight into the
+   * attached folder, or — on a fresh run with nowhere to write yet — hold the
+   * parsed statements and open the folder picker. `attach` finishes the import
+   * once a folder is chosen.
+   */
   async function importDropped(files: File[]) {
     if (importing) return;
     setImporting(true);
@@ -215,6 +223,11 @@ export function Dashboard() {
       const parsed = await parseDroppedFiles(files);
       if (parsed.length === 0) {
         toast.message("No OFX, QFX, or CSV statements in that drop");
+        return;
+      }
+      if (!folder) {
+        setPendingImport(parsed);
+        setPickerOpen(true);
         return;
       }
       toastImport(await importAndSave(parsed));
@@ -245,11 +258,25 @@ export function Dashboard() {
         toast.error("Could not attach that folder");
         return;
       }
+      // Capture and clear before closing the picker, so its close handler does
+      // not read this as a cancel.
+      const pending = pendingImport;
+      setPendingImport(null);
+
       setFolder(state.folder);
       setLedgerWritable(true, writeLedger);
       if (state.ledger) useLedgerStore.getState().loadSnapshot(state.ledger);
       setPickerOpen(false);
-      toastSync(await syncAttachedFolder(state.folder.name));
+      setImporting(false);
+
+      if (pending) {
+        // The drop that opened the picker now has a home: save it, then pick up
+        // anything already sitting in the folder without a second toast.
+        toastImport(await importAndSave(pending));
+        await syncAttachedFolder(state.folder.name).catch(() => null);
+      } else {
+        toastSync(await syncAttachedFolder(state.folder.name));
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not attach that folder");
     }
@@ -364,7 +391,7 @@ export function Dashboard() {
               <span className="max-w-md text-sm text-muted-foreground">
                 {folder
                   ? `Drop exports here, or add them to ${folder.name} and hit Sync.`
-                  : "OFX, QFX, or CSV exports from your bank — drop the whole folder if that is how you keep them."}
+                  : "OFX, QFX, or CSV exports from your bank — drop the whole folder if that is how you keep them. You'll pick a folder to keep the ledger in."}
               </span>
             </div>
             <StatementDropzone
@@ -513,7 +540,15 @@ export function Dashboard() {
       <ImportSheet open={importOpen} onOpenChange={setImportOpen} />
       <FolderPicker
         open={pickerOpen}
-        onOpenChange={setPickerOpen}
+        onOpenChange={(open) => {
+          setPickerOpen(open);
+          // Closed without choosing — drop the statements we were holding.
+          if (!open && pendingImport) {
+            setPendingImport(null);
+            setImporting(false);
+            toast.message("Import cancelled — pick a folder to keep the ledger in");
+          }
+        }}
         startAt={folder?.path || home}
         onChoose={attach}
       />

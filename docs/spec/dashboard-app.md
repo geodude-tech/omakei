@@ -159,10 +159,20 @@ drag or through the folder picker).
 ### The empty state
 
 `transactions.length === 0` renders one card built around the same
-`StatementDropzone`. Dropping or choosing there imports **immediately** —
-`parseDroppedFiles` → `importAndSave` → `toastImport` — with no per-file preview;
-a mis-guessed account kind is corrected afterward, not before. The card stays put
-when a folder is attached but still empty, as a one-off import alongside Sync.
+`StatementDropzone`. Dropping or choosing there imports with no per-file preview;
+a mis-guessed account kind is corrected afterward, not before.
+
+- **A folder is attached:** `parseDroppedFiles` → `importAndSave` → `toastImport`
+  straight away. The card stays put on a folder-attached-but-empty ledger, as a
+  one-off import alongside Sync.
+- **No folder yet (a fresh run):** there is nowhere to save a ledger, so the
+  parsed statements are held in `pendingImport` and the `FolderPicker` opens
+  ("pick a folder to keep the ledger in"). `attach` then runs the held import
+  into the chosen folder and quietly syncs it. Dismissing the picker drops the
+  held statements with a toast. Without this, a fresh-run drop filled the store
+  in memory only — `saveLedgerNow` no-ops until `setLedgerWritable`, and the
+  server's `PUT /ledger` 409s with no attached folder — so nothing survived a
+  reload.
 
 ### CSV export
 
@@ -236,10 +246,12 @@ Verified against the current suite (2026-08-28): 82 tests pass.
    over `selectedMonth` (`opening-month.test.ts` + `boot.ts`).
 5. **Met.** No `localStorage`/`sessionStorage` and no `fetch` to any non-`/__omakei`
    origin anywhere in `src/`.
-6. **Met.** The empty state is a `StatementDropzone`; a drop imports through
-   `parseDroppedFiles` → `importAndSave` with no preview, and `collectEntryFiles`
-   flattens a dropped folder (`dropped-entries.test.ts`). The header shows no
-   attach control; "Sync" renders only when `folder` is set.
+6. **Met.** The empty state is a `StatementDropzone`; `collectEntryFiles`
+   flattens a dropped folder (`dropped-entries.test.ts`). With a folder attached
+   a drop imports through `parseDroppedFiles` → `importAndSave` with no preview;
+   with no folder it opens the `FolderPicker` and imports into the chosen folder
+   (verified by hand — a fresh-run drop persists across a reload). The header
+   shows no attach control; "Sync" renders only when `folder` is set.
 
 ## Open Questions
 

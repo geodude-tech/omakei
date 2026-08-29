@@ -173,6 +173,10 @@ same merge as a sync, so a browser folder drop and a server sync of the same
 files produce the same ledger. The empty-state path skips the per-file preview;
 `inferKindFromName` / the folder-name strip carry the account kind.
 
+On a **fresh run with no folder attached**, the drop has nowhere to persist, so
+the parsed statements are held and the `FolderPicker` opens; the import runs into
+the folder the user picks. See `docs/spec/dashboard-app.md`, "The empty state".
+
 ### Merge is one pass
 
 `sync.ts` reads every statement in the folder, parses all of them, and calls
