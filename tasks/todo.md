@@ -149,7 +149,7 @@ drop now works in the Import sheet as a side effect.
 
 ---
 
-## Task 5: Empty-state card becomes `StatementDropzone`, imports immediately
+## Task 5: Empty-state card becomes `StatementDropzone`, imports immediately — DONE
 
 **Description:** In `dashboard.tsx`, replace the `<button onClick={resync}>`
 empty-state block with `<StatementDropzone>` wording that includes folders
