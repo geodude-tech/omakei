@@ -271,6 +271,66 @@ async function isDirectory(path) {
   }
 }
 
+/**
+ * Statement files at or just below `dir`, so the picker can say which folder
+ * actually holds exports. Bounded on purpose: a listing must never stall on a
+ * home directory full of source trees, so the walk stops at `depth` levels and
+ * shares a directory budget across one request.
+ */
+async function countStatements(dir, depth, budget) {
+  if (depth < 0 || budget.left <= 0) return 0;
+  budget.left -= 1;
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let n = 0;
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    if (entry.isFile()) {
+      if (STATEMENT_EXTS.has(extname(entry.name).toLowerCase())) n += 1;
+    } else if (entry.isDirectory() && depth > 0) {
+      n += await countStatements(join(dir, entry.name), depth - 1, budget);
+    }
+  }
+  return n;
+}
+
+/**
+ * The handful of folders worth one click, skipping any this machine lacks.
+ *
+ * Mounted volumes are in here because the picker has no path box on purpose:
+ * statements kept on an external drive have to be reachable by clicking, and
+ * climbing to `/` and back down is not that.
+ */
+async function placesFor(home) {
+  const found = [];
+  for (const place of [
+    { name: "Home", path: home },
+    { name: "Documents", path: join(home, "Documents") },
+    { name: "Downloads", path: join(home, "Downloads") },
+    { name: "Desktop", path: join(home, "Desktop") },
+  ]) {
+    if (await isDirectory(place.path)) found.push(place);
+  }
+  for (const root of [join("/run/media", basename(home)), join("/media", basename(home)), "/mnt"]) {
+    let mounted;
+    try {
+      mounted = await readdir(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of mounted) {
+      if (entry.isDirectory() && !entry.name.startsWith(".")) {
+        found.push({ name: entry.name, path: join(root, entry.name) });
+      }
+    }
+  }
+  return found;
+}
+
 async function listStatements(root) {
   const out = [];
   async function walk(dir) {
@@ -422,12 +482,51 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
           deny(res, 404, "No such folder");
           return true;
         }
-        const entries = (await readdir(dir, { withFileTypes: true }))
-          .filter((e) => e.isDirectory() && !e.name.startsWith("."))
-          .map((e) => ({ name: e.name, path: join(dir, e.name) }))
-          .sort((a, b) => a.name.localeCompare(b.name));
+        let dirents;
+        try {
+          dirents = await readdir(dir, { withFileTypes: true });
+        } catch {
+          // A folder you cannot read is a dead end, not a server fault. The
+          // picker has no path box, so it says so and leaves you where you were.
+          deny(res, 403, "Could not read that folder");
+          return true;
+        }
+        const names = [];
+        for (const entry of dirents) {
+          if (entry.name.startsWith(".")) continue;
+          const path = join(dir, entry.name);
+          // A symlinked folder is followed on purpose: `~/Statements` pointing
+          // at an external drive is a normal way to keep them, and with no path
+          // box to type into, hiding the link would put that folder out of
+          // reach entirely. A broken link stats false and is skipped.
+          if (!entry.isDirectory() && !(entry.isSymbolicLink() && (await isDirectory(path)))) {
+            continue;
+          }
+          names.push({ name: entry.name, path });
+        }
+        names.sort((a, b) => a.name.localeCompare(b.name));
+        // Each row is counted one level deep and the folder you are standing in
+        // two, so "which of these has my exports?" is answered without walking
+        // the tree. Statements commonly sit in a `Credit/` or `Checking/`
+        // subfolder, which is why a row looks past its own files. Every row
+        // gets its own budget: a shared one would let a source tree earlier in
+        // the list starve the real statements folder into reading as empty.
+        const entries = [];
+        for (const entry of names) {
+          entries.push({
+            ...entry,
+            statements: await countStatements(entry.path, 1, { left: 64 }),
+          });
+        }
         const parent = dirname(dir);
-        json(res, 200, { path: dir, parent: parent === dir ? null : parent, entries });
+        json(res, 200, {
+          path: dir,
+          parent: parent === dir ? null : parent,
+          entries,
+          statements: await countStatements(dir, 2, { left: 256 }),
+          home,
+          places: await placesFor(home),
+        });
         return true;
       }
 

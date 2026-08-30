@@ -181,10 +181,26 @@ names, offered as a browser download (never written to disk by the app).
 
 ### No sample ledger
 
-There is no dummy data. An empty ledger renders the drop-zone card above. The
-server-backed folder picker (which enables the bar's autonomous sync) is reached
-from the 3-dot menu — "Attach a folder" / "Change folder"; the header carries no
-attach button, and its "Sync" action shows only once a folder is attached.
+There is no dummy data. With no folder attached, the empty state leads with
+**Choose your statements folder**, which opens the `FolderPicker`; the drop zone
+sits below it as the shortcut for someone holding exports already. Once a folder
+is attached the button goes away and the drop zone is the whole card. The picker
+is also in the 3-dot menu — "Attach a folder" / "Change folder". The header
+carries no attach button, and its "Sync" action shows only once a folder is
+attached.
+
+### The picker has no path box
+
+Choosing is clicking and the keyboard, never typing. The orientation is a
+breadcrumb, a Places row (home folders plus anything mounted under
+`/run/media/$USER`, `/media/$USER`, or `/mnt`), and a statement count on every
+row — the folder you want is the one showing a number. Arrows move focus through
+real buttons, Enter walks in, Backspace goes up, and Ctrl/Cmd+Enter attaches
+where you are stood.
+
+A browser cannot do this itself: `showDirectoryPicker` hands back an opaque
+handle and a dropped folder hands back copies, and neither carries the real path
+the bar widget needs. That is why the server browses and the page only renders.
 
 ## Testing Strategy
 
@@ -246,12 +262,15 @@ Verified against the current suite (2026-08-28): 82 tests pass.
    over `selectedMonth` (`opening-month.test.ts` + `boot.ts`).
 5. **Met.** No `localStorage`/`sessionStorage` and no `fetch` to any non-`/__omakei`
    origin anywhere in `src/`.
-6. **Met.** The empty state is a `StatementDropzone`; `collectEntryFiles`
-   flattens a dropped folder (`dropped-entries.test.ts`). With a folder attached
-   a drop imports through `parseDroppedFiles` → `importAndSave` with no preview;
-   with no folder it opens the `FolderPicker` and imports into the chosen folder
-   (verified by hand — a fresh-run drop persists across a reload). The header
-   shows no attach control; "Sync" renders only when `folder` is set.
+6. **Met.** The empty state leads with the `FolderPicker` and keeps a
+   `StatementDropzone` below it; `collectEntryFiles` flattens a dropped folder
+   (`dropped-entries.test.ts`). With a folder attached a drop imports through
+   `parseDroppedFiles` → `importAndSave` with no preview; with no folder it
+   opens the `FolderPicker` and imports into the chosen folder (verified by
+   hand — a fresh-run drop persists across a reload). A drop that carried a
+   `file://` URI opens the picker already standing in that folder
+   (`droppedPath`, `dropped-entries.test.ts`). The header shows no attach
+   control; "Sync" renders only when `folder` is set.
 
 ## Open Questions
 

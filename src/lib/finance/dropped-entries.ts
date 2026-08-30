@@ -72,3 +72,44 @@ export async function filesFromDataTransfer(dt: DataTransfer): Promise<File[]> {
   if (entries.length === 0) return Array.from(dt.files ?? []);
   return collectEntryFiles(entries as unknown as EntryLike[]);
 }
+
+/**
+ * The real filesystem path behind a drop, when the desktop sends one.
+ *
+ * A dropped folder reaches the page as copies of its files with no path, which
+ * is no use to a server whose whole job is recording *where* the folder is.
+ * Linux file managers also put `file://` URIs on the drag, and those are real
+ * paths — so when they are there, the picker can open on the folder that was
+ * dropped instead of making the user find it a second time. When they are not,
+ * nothing changes and the picker opens at home.
+ *
+ * `isDirectory` decides whether the path is the folder itself or the file that
+ * sits in it; the caller knows, because the entries API already told it.
+ *
+ * Must be read synchronously in the drop handler: a `DataTransfer` is emptied
+ * once the event finishes.
+ */
+export function droppedPath(dt: DataTransfer, isDirectory: boolean): string | null {
+  let list = "";
+  try {
+    list = dt.getData("text/uri-list");
+  } catch {
+    return null;
+  }
+  for (const line of list.split(/\r?\n/)) {
+    const uri = line.trim();
+    // A uri-list comment, per RFC 2483.
+    if (!uri || uri.startsWith("#") || !uri.startsWith("file://")) continue;
+    let path;
+    try {
+      path = decodeURIComponent(new URL(uri).pathname);
+    } catch {
+      continue;
+    }
+    if (!path.startsWith("/")) continue;
+    if (isDirectory) return path;
+    const parent = path.slice(0, path.lastIndexOf("/"));
+    return parent || "/";
+  }
+  return null;
+}
