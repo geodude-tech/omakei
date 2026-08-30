@@ -78,7 +78,7 @@ loopback `Host` header, and either no `Origin` or a loopback `Origin`; otherwise
 | `GET /state` | `{ folder, ledger, ledgerPath, home }` — one round trip to paint |
 | `POST /folder` `{path}` | Attach a folder (must exist). Persists `state.json`, bumps revision |
 | `DELETE /folder` | Detach. Persists empty `state.json`, bumps revision |
-| `GET /browse?path=` | Directory listing for the editor's folder picker (returns real paths) |
+| `GET /browse?path=` | Directory listing for the editor's folder picker (returns real paths), plus the statement count at and just below each row, the count two levels below `path`, `home`, and the `places` worth one click (home dirs and mounted volumes). Symlinked folders are followed — the picker has no path box, so a hidden folder is an unreachable one. `403` for a folder that cannot be read |
 | `GET /statements` | Every statement file under the folder, recursively, codepoint-sorted |
 | `GET /statements/file?path=` | One statement's text, `safeJoin`-checked, extension-checked, capped at 32 MB |
 | `PUT /ledger` | Validate `isLedgerPayload`, write atomically, bump revision |

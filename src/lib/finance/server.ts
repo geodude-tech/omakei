@@ -19,10 +19,17 @@ export type ServerState = {
   home: string;
 };
 
+export type BrowseEntry = { name: string; path: string; statements: number };
+
 export type BrowseResult = {
   path: string;
   parent: string | null;
-  entries: Array<{ name: string; path: string }>;
+  entries: BrowseEntry[];
+  /** Statement files at or just below `path`, so a folder can show its worth. */
+  statements: number;
+  home: string;
+  /** Home, Documents, Downloads, Desktop — whichever this machine has. */
+  places: Array<{ name: string; path: string }>;
 };
 
 const EMPTY_STATE: ServerState = { folder: null, ledger: null, ledgerPath: "", home: "" };

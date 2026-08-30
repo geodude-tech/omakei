@@ -5,25 +5,29 @@
  * identically. It takes loose files and — via the entries API — a dropped
  * folder, walked recursively; every statement it finds goes to `onFiles` with
  * its drop-relative path, so a `Credit/` or `Mortgage/` subfolder still reaches
- * the account-kind guess. Clicking opens a multi-file picker (one input cannot
- * be both `multiple` and `webkitdirectory`; a whole folder goes in by drag, or
- * through the 3-dot menu's folder picker).
+ * the account-kind guess. Clicking opens a multi-file picker: a browser file
+ * input hands back copies with no real path, so *attaching* the folder is the
+ * FolderPicker's job and never this one's. A drop with nowhere to save yet
+ * lands in that picker too.
  */
 import { useRef, useState, type DragEvent, type ReactNode } from "react";
 import { Upload } from "lucide-react";
-import { filesFromDataTransfer } from "@/lib/finance/dropped-entries";
+import { droppedPath, filesFromDataTransfer } from "@/lib/finance/dropped-entries";
 import { cn } from "@/lib/utils";
 
 const ACCEPT = ".csv,.tsv,.ofx,.qfx,.ofc,.txt,text/csv";
 
 export function StatementDropzone({
   onFiles,
+  onPath,
   disabled = false,
-  label = "Drop statements or a folder, or click to choose files",
+  label = "Drop statements here, or click to choose files",
   hint = "OFX, QFX, OFC, CSV, or TSV",
   className,
 }: {
   onFiles: (files: File[]) => void;
+  /** The real path the drop came from, when the desktop sent one. */
+  onPath?: (path: string) => void;
   disabled?: boolean;
   label?: ReactNode;
   hint?: ReactNode;
@@ -36,7 +40,14 @@ export function StatementDropzone({
     e.preventDefault();
     setDragOver(false);
     if (disabled) return;
+    // Both reads have to happen before the first await: a DataTransfer is
+    // emptied the moment the drop event finishes.
+    const dropped = Array.from(e.dataTransfer.items ?? [])
+      .map((item) => item.webkitGetAsEntry?.() ?? null)
+      .find((entry) => entry != null);
+    const path = droppedPath(e.dataTransfer, dropped?.isDirectory ?? false);
     const files = await filesFromDataTransfer(e.dataTransfer);
+    if (path) onPath?.(path);
     if (files.length) onFiles(files);
   }
 

@@ -15,6 +15,7 @@ import {
   truncateSync,
   writeFileSync,
   mkdirSync,
+  chmodSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -260,6 +261,86 @@ test("browse walks real directories and reports where it is", async () => {
     );
     assert.equal(down.parent, home);
     assert.equal((await s.call("/browse?path=%2Fnot%2Fa%2Fplace")).status, 404);
+  } finally {
+    await s.close();
+  }
+});
+
+test("browse counts the statements at and just below each folder", async () => {
+  // The count is the whole reason the picker beats a generic file dialog: it is
+  // what tells you which of a dozen folders is the one holding your exports.
+  const { home, statements } = tempTree();
+  writeFileSync(join(statements, "Credit", "aug.csv"), "Date,Description,Amount\n");
+  writeFileSync(join(statements, "Credit", "jul.qfx"), "<OFX></OFX>\n");
+  writeFileSync(join(statements, "notes.md"), "not a statement\n");
+  mkdirSync(join(home, "Photos"), { recursive: true });
+  const s = await serve(home);
+  try {
+    const at = await (await s.call(`/browse?path=${encodeURIComponent(home)}`)).json();
+    const byName = Object.fromEntries(at.entries.map((e) => [e.name, e.statements]));
+    // One level below the row, so a `Credit/` subfolder still shows up.
+    assert.equal(byName.Statements, 2);
+    assert.equal(byName.Photos, 0);
+    // Two levels for where you are standing, which is the folder you attach.
+    assert.equal(at.statements, 2);
+  } finally {
+    await s.close();
+  }
+});
+
+test("browse follows a symlinked folder and refuses one it cannot read", async () => {
+  // With no path box in the picker, a folder that does not appear in a listing
+  // cannot be reached at all — and `~/Statements` pointing at an external drive
+  // is a normal way to keep them.
+  const { home, root } = tempTree();
+  const drive = join(root, "drive");
+  mkdirSync(join(drive, "Credit"), { recursive: true });
+  writeFileSync(join(drive, "Credit", "aug.csv"), "Date,Description,Amount\n");
+  symlinkSync(drive, join(home, "LinkedDrive"));
+  symlinkSync(join(root, "gone"), join(home, "Broken"));
+  const locked = join(home, "locked");
+  mkdirSync(locked, { recursive: true });
+  chmodSync(locked, 0o000);
+  const s = await serve(home);
+  try {
+    const at = await (await s.call(`/browse?path=${encodeURIComponent(home)}`)).json();
+    const byName = Object.fromEntries(at.entries.map((e) => [e.name, e.statements]));
+    assert.equal(byName.LinkedDrive, 1, "a symlinked folder is listed, and counted through");
+    assert.equal("Broken" in byName, false, "a broken symlink is not a folder");
+
+    // Reachable means attachable: the path is real either way.
+    const attached = await s.call("/folder", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: join(home, "LinkedDrive") }),
+    });
+    assert.equal(attached.status, 200);
+
+    // A folder you cannot read is a dead end, not a server fault.
+    const denied = await s.call(`/browse?path=${encodeURIComponent(locked)}`);
+    assert.equal(denied.status, 403);
+    assert.match((await denied.json()).error, /could not read/i);
+  } finally {
+    chmodSync(locked, 0o700);
+    await s.close();
+  }
+});
+
+test("browse offers the places a folder can be reached from", async () => {
+  const { home } = tempTree();
+  mkdirSync(join(home, "Documents"), { recursive: true });
+  const s = await serve(home);
+  try {
+    const at = await (await s.call(`/browse?path=${encodeURIComponent(home)}`)).json();
+    assert.equal(at.home, home);
+    const names = at.places.map((p) => p.name);
+    assert.deepEqual(names, ["Home", "Documents"]);
+    // Downloads and Desktop do not exist in the tree, so they are not offered:
+    // the picker has no path box, so a dead shortcut is a dead end.
+    assert.equal(
+      at.places.find((p) => p.name === "Home").path,
+      home,
+    );
   } finally {
     await s.close();
   }

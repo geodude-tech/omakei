@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  FolderOpen,
   MoreHorizontal,
   RefreshCw,
   Search,
@@ -106,6 +107,8 @@ export function Dashboard() {
   // A fresh-run drop, parsed and held while the user picks a folder to keep the
   // ledger in — there is nowhere to save it until then.
   const [pendingImport, setPendingImport] = useState<ImportFileResult[] | null>(null);
+  /** Where a drop actually came from, when the desktop told us. */
+  const [droppedFrom, setDroppedFrom] = useState("");
 
   useLayoutEffect(() => {
     if (!initialized) return;
@@ -391,15 +394,38 @@ export function Dashboard() {
               <span className="max-w-md text-sm text-muted-foreground">
                 {folder
                   ? `Drop exports here, or add them to ${folder.name} and hit Sync.`
-                  : "OFX, QFX, or CSV exports from your bank — drop the whole folder if that is how you keep them. You'll pick a folder to keep the ledger in."}
+                  : "Point Omakei at the folder your OFX, QFX, or CSV exports already live in. It reads them there and keeps the ledger beside them."}
               </span>
             </div>
+            {/*
+              Choosing the folder is the whole first run, so it gets the button.
+              Dropping files is the shortcut for people who have exports to hand
+              and no folder in mind yet — it lands in the picker either way,
+              because only the server can turn a choice into a real path.
+            */}
+            {!folder ? (
+              <Button
+                size="lg"
+                onClick={() => {
+                  setDroppedFrom("");
+                  setPickerOpen(true);
+                }}
+              >
+                <FolderOpen className="size-4" />
+                Choose your statements folder
+              </Button>
+            ) : null}
             <StatementDropzone
               onFiles={(files) => void importDropped(files)}
+              onPath={setDroppedFrom}
               disabled={importing || syncing}
               className="w-full max-w-md"
               label={
-                importing ? "Importing…" : "Drop statements or a folder, or click to choose files"
+                importing
+                  ? "Importing…"
+                  : folder
+                    ? "Drop statements here, or click to choose files"
+                    : "Or drop statements here to start from them"
               }
             />
           </section>
@@ -543,13 +569,16 @@ export function Dashboard() {
         onOpenChange={(open) => {
           setPickerOpen(open);
           // Closed without choosing — drop the statements we were holding.
+          if (!open) setDroppedFrom("");
           if (!open && pendingImport) {
             setPendingImport(null);
             setImporting(false);
             toast.message("Import cancelled — pick a folder to keep the ledger in");
           }
         }}
-        startAt={folder?.path || home}
+        // A drop that carried a real path opens the picker already standing in
+        // that folder, so confirming is one click rather than a second hunt.
+        startAt={droppedFrom || folder?.path || home}
         onChoose={attach}
       />
       <RulesSheet open={rulesOpen} onOpenChange={setRulesOpen} />
