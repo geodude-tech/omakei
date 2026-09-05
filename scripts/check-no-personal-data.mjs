@@ -8,7 +8,7 @@
  *
  * What it can and cannot do: the patterns below match data with a recognisable
  * shape. Nothing here can tell that a merchant, a balance, or a family name is
- * *yours* — that rule lives in AGENTS.md and is enforced by review. For terms
+ * *yours* — that rule lives in docs/agents.md and is enforced by review. For terms
  * only this machine knows, put them one per line in `.githooks/personal-terms`,
  * which is gitignored precisely so the block list is not itself a leak.
  *

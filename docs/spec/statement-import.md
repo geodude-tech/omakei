@@ -61,7 +61,7 @@ src/lib/finance/store.ts        → importFiles(), categorizeMerchant/One(), unk
 
 Tests: `parse.test.ts`, `statements.test.ts`, `fingerprint.test.ts`,
 `transfers.test.ts`. Parser fixtures are **inline strings**, never files —
-statement extensions are gitignored (AGENTS.md).
+statement extensions are gitignored (docs/agents.md).
 
 ## Code Style
 
@@ -229,7 +229,7 @@ obvious.
 
 **Never:**
 - Put a household merchant, account name, or balance in a default pattern or a
-  fixture (AGENTS.md).
+  fixture (docs/agents.md).
 - Replay `rules` against `description` to "reproduce" categories — defaults ship
   in the build, so the replay is incomplete by construction (ledger rule 5).
 - Persist default rules into `omakei-ledger.json`. `snapshotFromState` filters to

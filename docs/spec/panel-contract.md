@@ -150,7 +150,7 @@ Node cannot strip-type JSX, so **a `.tsx` panel cannot be unit tested directly.*
 - Wrap each panel in its own error boundary. A thrown panel renders an inline
   "This panel failed" card and nothing else breaks.
 - Render panels in the `detailsReady` phase, after first paint, like the existing
-  chart. AGENTS.md requires time-to-display stay immediate; panels must never
+  chart. docs/agents.md requires time-to-display stay immediate; panels must never
   block the stat row.
 - Keep `PanelProps` additive. Fields may be added; existing fields keep their
   meaning, so old panels keep working.
@@ -165,7 +165,7 @@ Node cannot strip-type JSX, so **a `.tsx` panel cannot be unit tested directly.*
   TSX in the repo. The folder holds the user's financial data and is not a code
   path — executing code from it would make a data directory an attack surface.
 - Put personal data in a panel: no household merchants, balances, or account
-  names. Same rule as tests and fixtures (AGENTS.md).
+  names. Same rule as tests and fixtures (docs/agents.md).
 - Ship a panel without rebuilding `dist/`. The pre-commit hook catches it.
 
 ## Success Criteria

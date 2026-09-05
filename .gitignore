@@ -31,8 +31,9 @@ statements/
 # the block list would itself be the leak.
 .githooks/personal-terms
 
-# Claude Code's scratch worktrees: whole checkouts of this repo, never committed.
-.claude/worktrees/
+# Claude Code's local settings, sessions, and scratch worktrees (whole checkouts
+# of this repo). All machine-local working state, none of it part of the plugin.
+.claude/
 
 # Per-branch planning scratch from the spec-driven workflow (tasks/plan.md,
 # tasks/todo.md). The durable artifact is the spec under docs/spec/; the plan

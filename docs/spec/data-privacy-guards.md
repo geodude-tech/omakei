@@ -103,7 +103,7 @@ examples. Everything else uses the per-line pragma.
 ### What the scanner cannot do
 
 It cannot tell that a merchant, a balance, or a family name is *yours*. That
-judgement lives in AGENTS.md and is enforced by review. A clean run is one guard
+judgement lives in docs/agents.md and is enforced by review. A clean run is one guard
 passing, not proof the diff is safe. For household-specific words, the private
 `.githooks/personal-terms` list is the tool — gitignored precisely so the block
 list is not itself the leak.

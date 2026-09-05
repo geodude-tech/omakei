@@ -171,7 +171,7 @@ dead page.
 - Watch `ledger-revision` with `preload: false` and never read it.
 - Keep `Model.js` ES5 and testable; keep the `.qml` files thin.
 - Keep daily viewing in the popup — do not rebuild attach, import, rules, or the
-  full activity table there (AGENTS.md).
+  full activity table there (docs/agents.md).
 
 **Ask first:**
 - Adding anything the widget reads off disk (extend the reader, and say why).

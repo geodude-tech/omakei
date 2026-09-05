@@ -104,6 +104,11 @@ npm run dev:isolated  # dev server against a throwaway folder, not your ledger
 dev:isolated` keeps its own state file and statements under `.dev/`, which is
 gitignored, so development never reads or rewrites the real ones.
 
+[`docs/agents.md`](docs/agents.md) is the tour of how the repository fits
+together and why — worth reading, or handing to an agent, before a first change.
+It sits under `docs/` rather than at the root so that installing the plugin does
+not leave discoverable agent instructions on your machine.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

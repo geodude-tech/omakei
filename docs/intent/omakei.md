@@ -44,7 +44,7 @@ questions that turned out to be worth watching every day. The loop is:
 
 Three things follow from this that were not true before:
 
-1. **The product inverts.** `AGENTS.md` currently says "the installable product is
+1. **The product inverts.** `docs/agents.md` currently says "the installable product is
    the widget." That is backwards under this intent, and it is the source of the
    existing strain: ~4,700 lines of editor sitting behind a doc defending four
    widget files. The product is the ledger and the loop; the widget is one view.
