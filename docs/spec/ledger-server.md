@@ -69,9 +69,22 @@ ledger-revision   → a timestamp token, rewritten on every ledger change   — 
 
 ## API
 
-All routes are under `/__omakei`. Every route requires a loopback socket, a
-loopback `Host` header, and either no `Origin` or a loopback `Origin`; otherwise
-`403`.
+All routes are under `/__omakei`. Every route requires a loopback socket and a
+loopback `Host` header; otherwise `403`.
+
+`Origin` is judged by method. A read (`GET`) allows a loopback `Origin` or none,
+because a browser omits the header on a same-origin `GET` and on the navigation
+that loads the editor. A write (`POST`, `PUT`, `PATCH`, `DELETE`) requires a real
+loopback `Origin`: browsers always send one on a non-GET, so an absent header did
+not come from the editor, and `null` is what a sandboxed iframe or a `data:`
+document sends — the shape a cross-site page reaches for once its real `Origin`
+is refused. Treating either as same-origin left every write route open to a page
+in another tab.
+
+The same loopback socket and `Host` guard covers the static routes in
+`scripts/omakei-serve.mjs`, not just this handler: that server fills the SPA
+shell with the ledger, so an unguarded `GET /` would hand the whole ledger to
+anything that reaches the port.
 
 | Method + route | Does |
 |---|---|
@@ -159,7 +172,8 @@ the placeholders intact.
 covers, with a temp `XDG_STATE_HOME` and a temp folder:
 
 - Every route's happy path and its `403`/`400`/`404`/`405`/`409`/`413`.
-- The loopback socket, `Host`, and `Origin` checks.
+- The loopback socket, `Host`, and `Origin` checks, including that a `null` or
+  absent `Origin` cannot write.
 - `safeJoin` rejecting `../` escapes and absolute paths.
 - `readCapped` refusing a symlink, a directory, and an over-cap file.
 - `writeAtomic` leaving no temp file on failure and refusing a pre-placed symlink.
@@ -172,9 +186,13 @@ theme loader that share this module.
 ## Boundaries
 
 **Always:**
-- Serve on `127.0.0.1` only. Keep the loopback socket, `Host`, and `Origin`
-  guards. This is a personal ledger; nothing else on the network or in the
-  browser may reach it.
+- Serve on `127.0.0.1` only, and keep that enforced rather than assumed:
+  `omakei-serve.mjs` refuses to start on a non-loopback `OMAKEI_HOST`, and
+  `scripts/omakei-open` pins the widget's URL setting to loopback so the setting
+  can choose the port but never the interface.
+- Keep the loopback socket, `Host`, and `Origin` guards, and keep them in front
+  of the static routes too. This is a personal ledger; nothing else on the
+  network or in the browser may reach it.
 - Go through `readCapped` / `writeAtomic` for every disk touch. If the widget or
   anything else needs something new off disk, add it here — do not open a second
   path.
@@ -190,8 +208,12 @@ theme loader that share this module.
 **Never:**
 - Let `OMAKEI_STATEMENTS_DIR` override a saved folder — it would rewrite the
   user's real `state.json` and point their bar at dev data.
-- Bind to a non-loopback host by default.
+- Bind to a non-loopback host. Not by default and not on request: the server
+  exits rather than honour a LAN-facing `OMAKEI_HOST`.
 - Follow a symlink at the final path component (`O_NOFOLLOW` on every open).
+- Touch disk by pathname where a directory descriptor is available: reads,
+  writes, renames, and directory creation all go through `withDir` /
+  `ensureDir` so a swapped parent cannot redirect them.
 
 ## Success Criteria
 
@@ -204,7 +226,9 @@ Verified against the current suite (2026-08-28).
    `omakei-html-plugin.mjs`).
 3. **Met.** A `PUT /ledger` rewrites `omakei-ledger.json` atomically and bumps
    `ledger-revision`.
-4. **Met.** A cross-origin request and a non-loopback `Host` both get `403`.
+4. **Met.** A cross-origin request and a non-loopback `Host` both get `403`,
+   on the static routes as well as the API, and a `null` or absent `Origin`
+   cannot reach a write route.
 5. **Met.** `dev:isolated` reads and writes only under `.dev/`, leaving the real
    `state.json` untouched.
 
@@ -222,6 +246,17 @@ Verified against the current suite (2026-08-28).
    `currentDir()` and only `persist()` updates it. An external edit to
    `state.json` while the server runs is not noticed until restart. Fine for the
    widget (separate process) but a latent surprise.
-4. **A symlinked _parent_ directory still resolves.** `O_NOFOLLOW` covers the
-   last component only; Node has no `openat2`. Documented in the code, not
-   elsewhere.
+4. **Resolved (2026-09-02): operations are bound to directory descriptors.**
+   `O_NOFOLLOW` covers the last component only, so a swapped *parent* used to
+   move a read or a write with it. Every disk touch now opens its directory
+   first and works through `/proc/self/fd/<fd>/name`, which names an inode
+   rather than a path: `readCapped`, `writeAtomic` (create and rename both),
+   and the revision write are anchored, and the state directory is created a
+   level at a time through each parent's descriptor instead of
+   `mkdir(recursive)`.
+
+   A symlinked parent still *resolves* — `~/Statements` pointing at an external
+   drive is supported, and `GET /browse` follows symlinked folders on purpose.
+   What changed is that it resolves once. Node still has no `openat2`, so this
+   does not refuse symlinks outright; it removes the window between the check
+   and the use, which is what the reachable attack needed.

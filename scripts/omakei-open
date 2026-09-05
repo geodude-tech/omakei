@@ -8,9 +8,33 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 URL="${1:-http://127.0.0.1:8080/}"
-ORIGIN="$(printf '%s' "$URL" | sed -E 's#^([a-zA-Z]+://[^/]+).*#\1#')"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omakei"
 LOG="$STATE/server.log"
+
+# The widget's Omakei URL chooses the port; it does not get to choose the
+# interface. The server fills every page it serves with the ledger, so a
+# LAN-facing bind would publish someone's finances to the network -- and
+# omakei-serve.mjs refuses to start on one. A URL naming anything but loopback
+# is pulled back to 127.0.0.1 here, keeping its path and query, so the browser
+# and the server still agree on where Omakei is instead of failing to connect.
+authority="${URL#*://}"
+authority="${authority%%/*}"
+port="${authority##*:}"
+case "$port" in "" | *[!0-9]*) port=8080 ;; esac
+host="${authority%%:*}"
+case "$host" in
+  127.0.0.1 | localhost) ;;
+  *)
+    rest="${URL#*://}"
+    case "$rest" in
+      */*) rest="/${rest#*/}" ;;
+      *) rest="/" ;;
+    esac
+    host=127.0.0.1
+    URL="http://127.0.0.1:$port$rest"
+    ;;
+esac
+ORIGIN="http://$host:$port"
 
 serving() { curl -sf -o /dev/null --max-time 1 "$ORIGIN/" 2>/dev/null; }
 open_browser() {
@@ -29,12 +53,6 @@ if [ ! -f "$ROOT/dist/index.html" ]; then
   echo "omakei: no build at $ROOT/dist — run: npm install && npm run build" >&2
   exit 1
 fi
-
-# Host and port follow the widget's Omakei URL setting.
-host="${ORIGIN#*://}"
-port="${host##*:}"
-[ "$port" = "$host" ] && port=8080
-host="${host%%:*}"
 
 mkdir -p "$STATE"
 OMAKEI_HOST="$host" OMAKEI_PORT="$port" \
