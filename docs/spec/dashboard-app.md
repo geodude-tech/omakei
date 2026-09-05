@@ -242,7 +242,7 @@ panels).
 - Add an "ask Omakei" box or any model call, API key, or chat UI. The app stays
   deliberately dumb; the agent lives in the terminal.
 - Ship a sample/dummy ledger.
-- Put personal data in a component, fixture, or default (AGENTS.md).
+- Put personal data in a component, fixture, or default (docs/agents.md).
 - Rebuild the popup's flows (attach, import, rules, full activity) — those stay
   in the editor; the popup stays read-only viewing.
 

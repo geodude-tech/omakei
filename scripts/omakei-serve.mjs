@@ -12,13 +12,32 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createLedgerApi } from "./ledger-api.mjs";
+import { createLedgerApi, isLoopbackHost, isLoopbackSocket } from "./ledger-api.mjs";
 import { renderShell } from "./page-shell.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = resolve(process.env.OMAKEI_DIST || join(ROOT, "dist"));
-const HOST = process.env.OMAKEI_HOST || "127.0.0.1";
 const PORT = Number(process.env.OMAKEI_PORT || 8080);
+
+/**
+ * A bind address, not a `Host` header: written out rather than run through
+ * `isLoopbackHost` because that parser expects a header and reads bare `::1`
+ * as a host and a port.
+ */
+const LOOPBACK_BINDS = new Set(["127.0.0.1", "localhost", "::1"]);
+const HOST = process.env.OMAKEI_HOST || "127.0.0.1";
+
+// `OMAKEI_HOST` exists so the port can move, not so the interface can. Every
+// response here can carry the ledger -- the SPA shell is filled with it -- so a
+// LAN-facing bind publishes someone's finances to the network. A wrong value is
+// refused rather than quietly corrected, so it fails where it was set.
+if (!LOOPBACK_BINDS.has(HOST)) {
+  console.error(
+    `[omakei] refusing to serve on ${HOST}: the ledger is served to this machine only.\n` +
+      `         set OMAKEI_HOST to one of ${[...LOOPBACK_BINDS].join(", ")}`,
+  );
+  process.exit(1);
+}
 
 const api = createLedgerApi();
 
@@ -61,6 +80,16 @@ async function sendIndex(res, status = 200) {
 
 const server = createServer(async (req, res) => {
   try {
+    // The static path is guarded with the API rather than beside it. The SPA
+    // shell is filled with the ledger so the editor paints on the first frame,
+    // which makes an unguarded `GET /` the whole ledger to anything that can
+    // reach the port -- including a page that rebinds a name it owns to
+    // 127.0.0.1 and so arrives on a loopback socket.
+    if (!isLoopbackSocket(req) || !isLoopbackHost(req.headers?.host)) {
+      res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+      res.end("Omakei is reachable from this machine only\n");
+      return;
+    }
     if (await api.handle(req, res)) return;
     if (req.method !== "GET" && req.method !== "HEAD") {
       res.writeHead(405, { allow: "GET, HEAD" }).end();

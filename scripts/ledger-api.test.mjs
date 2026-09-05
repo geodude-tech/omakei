@@ -16,6 +16,7 @@ import {
   writeFileSync,
   mkdirSync,
   chmodSync,
+  existsSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -28,6 +29,8 @@ import {
   parseStateFile,
   renderStateFile,
   safeJoin,
+  withDir,
+  writeAtomic,
 } from "./ledger-api.mjs";
 
 const temps = [];
@@ -64,7 +67,17 @@ async function serve(home) {
   return {
     api,
     base,
-    call: (path, init) => fetch(`${base}/__omakei${path}`, init),
+    // A browser always sends Origin on a non-GET, and the server now requires
+    // one there. The harness mirrors the browser so a test that is not about
+    // the guard does not have to restate it; a test that is about the guard
+    // sets its own Origin and keeps it.
+    call: (path, init = {}) => {
+      const method = (init.method ?? "GET").toUpperCase();
+      const headers = { ...(init.headers ?? {}) };
+      const named = Object.keys(headers).some((k) => k.toLowerCase() === "origin");
+      if (method !== "GET" && method !== "HEAD" && !named) headers.origin = base;
+      return fetch(`${base}/__omakei${path}`, { ...init, headers });
+    },
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }
@@ -653,6 +666,81 @@ test("a symlinked revision file is not written through", async () => {
   }
 });
 
+test("a sandboxed page cannot write with a null or absent Origin", async () => {
+  const { home, statements } = tempTree();
+  const s = await serve(home);
+  try {
+    // What a sandboxed iframe or a data: document sends. It used to read as
+    // same-origin, which left every write route open to a page in another tab.
+    for (const origin of ["null", ""]) {
+      const attach = await s.call("/folder", {
+        method: "POST",
+        headers: { "content-type": "application/json", origin },
+        body: JSON.stringify({ path: statements }),
+      });
+      assert.equal(attach.status, 403);
+
+      const wipe = await s.call("/folder", { method: "DELETE", headers: { origin } });
+      assert.equal(wipe.status, 403);
+
+      const write = await s.call("/ledger", {
+        method: "PUT",
+        headers: { "content-type": "application/json", origin },
+        body: JSON.stringify({ version: 1, transactions: [], rules: [] }),
+      });
+      assert.equal(write.status, 403);
+    }
+
+    // Nothing was attached by any of that.
+    assert.equal((await (await s.call("/state")).json()).folder, null);
+
+    // The editor's own page still writes.
+    const ok = await s.call("/folder", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: s.base },
+      body: JSON.stringify({ path: statements }),
+    });
+    assert.equal(ok.status, 200);
+  } finally {
+    await s.close();
+  }
+});
+
+test("a directory swapped after it is opened cannot redirect the write", async () => {
+  const { root } = tempTree();
+  const real = join(root, "real");
+  const decoy = join(root, "decoy");
+  const live = join(root, "live");
+  mkdirSync(real);
+  mkdirSync(decoy);
+  symlinkSync(real, live);
+
+  await withDir(live, async (at) => {
+    // Exactly the window a pathname-based write leaves open: the directory was
+    // checked, and the name it was checked through now means something else.
+    rmSync(live);
+    symlinkSync(decoy, live);
+    await writeAtomic(`${at}/landed.json`, "{}\n");
+  });
+
+  // The write followed the descriptor, not the name.
+  assert.equal(existsSync(join(real, "landed.json")), true);
+  assert.equal(existsSync(join(decoy, "landed.json")), false);
+});
+
+test("a symlinked parent is still a supported place to keep statements", async () => {
+  const { root } = tempTree();
+  const real = join(root, "elsewhere");
+  const link = join(root, "Statements");
+  mkdirSync(real);
+  symlinkSync(real, link);
+
+  // `~/Statements` pointing at an external drive has to keep working: anchoring
+  // resolves the parent once, it does not refuse one.
+  await writeAtomic(join(link, "omakei-ledger.json"), "{}\n");
+  assert.equal(readFileSync(join(real, "omakei-ledger.json"), "utf8"), "{}\n");
+});
+
 test("path and header helpers", () => {
   assert.equal(safeJoin("/root", "a/b.csv"), "/root/a/b.csv");
   assert.equal(safeJoin("/root", "../escape.csv"), null);
@@ -664,10 +752,21 @@ test("path and header helpers", () => {
   assert.equal(isLoopbackHost("example.com"), false);
   assert.equal(isLoopbackHost(""), false);
 
-  assert.equal(isAllowedOrigin(""), true);
-  assert.equal(isAllowedOrigin("null"), true);
-  assert.equal(isAllowedOrigin("http://127.0.0.1:8080"), true);
-  assert.equal(isAllowedOrigin("https://example.com"), false);
+  // A read may arrive without an Origin: browsers omit it on a same-origin GET
+  // and on the navigation that loads the editor.
+  assert.equal(isAllowedOrigin("", "GET"), true);
+  assert.equal(isAllowedOrigin("null", "GET"), true);
+  assert.equal(isAllowedOrigin("http://127.0.0.1:8080", "GET"), true);
+  assert.equal(isAllowedOrigin("https://example.com", "GET"), false);
+
+  // A write may not. An absent Origin did not come from the editor, and "null"
+  // is what a sandboxed iframe sends -- the way a cross-site page gets around
+  // having its real Origin refused.
+  assert.equal(isAllowedOrigin("", "POST"), false);
+  assert.equal(isAllowedOrigin("null", "POST"), false);
+  assert.equal(isAllowedOrigin("null", "DELETE"), false);
+  assert.equal(isAllowedOrigin("null", "PUT"), false);
+  assert.equal(isAllowedOrigin("http://127.0.0.1:8080", "POST"), true);
 
   assert.match(renderStateFile("/s"), /"ledgerPath":"\/s\/omakei-ledger\.json"/);
   assert.equal(parseStateFile(renderStateFile("")), null);

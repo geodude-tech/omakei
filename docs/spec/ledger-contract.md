@@ -48,7 +48,7 @@ an agent, and both are guarded by `npm test` rather than trusted.
 
 Three alternatives were considered and rejected:
 
-- **Embed the semantics in `omakei-ledger.json`.** AGENTS.md requires the ledger
+- **Embed the semantics in `omakei-ledger.json`.** docs/agents.md requires the ledger
   persist compactly, and the rules are about ten times the size of a month of
   transactions. Rejected.
 - **Write a README into the statements folder.** The server would have to write

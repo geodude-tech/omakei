@@ -70,14 +70,30 @@ export function isLoopbackHost(hostHeader) {
   return name === "127.0.0.1" || name === "localhost" || name === "::1";
 }
 
+/** Methods that change something on disk, and so answer to the stricter rule. */
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
 /**
  * A page on another origin can still make the browser send a request here.
  * Requests that carry a foreign Origin are refused, which keeps the ledger
  * out of reach of whatever else the user has open.
+ *
+ * A missing Origin has to stay readable: a browser omits the header on a
+ * same-origin GET and on the navigation that loads the editor, so demanding it
+ * everywhere would refuse the page its own data.
+ *
+ * A mutation is different. Browsers always send Origin on a non-GET request,
+ * so an absent one did not come from the editor, and `null` is precisely what a
+ * sandboxed iframe or a `data:` document sends -- the shapes a cross-site page
+ * reaches for once a real Origin gets it refused. Treating either as same-origin
+ * left `POST /folder` open to any page the user had in another tab, which is why
+ * writes now require a real loopback Origin.
  */
-export function isAllowedOrigin(originHeader) {
+export function isAllowedOrigin(originHeader, method = "GET") {
   const origin = String(originHeader || "").trim();
-  if (!origin || origin === "null") return true;
+  if (!origin || origin === "null") {
+    return !MUTATING_METHODS.has(String(method || "GET").toUpperCase());
+  }
   try {
     const url = new URL(origin);
     return isLoopbackHost(url.host);
@@ -174,13 +190,18 @@ function readBody(req, limit) {
  *
  * Returns null for anything that is not a readable regular file within `max`.
  *
- * The no-follow guarantee covers the last component only. A symlinked *parent*
- * directory still resolves, which Node cannot prevent without `openat2`.
+ * The parent directory is opened first and the file is opened through its
+ * descriptor, so the directory read from is the one that was checked. A
+ * symlinked parent still resolves on the way in -- that is a supported way to
+ * keep statements -- but it resolves once, and cannot be swapped afterwards to
+ * move the read somewhere else.
  */
 export async function readCapped(path, max) {
   let fh;
   try {
-    fh = await open(path, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
+    fh = await withDir(dirname(path), (at) =>
+      open(`${at}/${basename(path)}`, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK),
+    );
     const info = await fh.stat();
     if (!info.isFile()) return null;
     if (info.size > max) return null;
@@ -200,6 +221,66 @@ export async function readCapped(path, max) {
 }
 
 /**
+ * Run `fn` against a path that stays bound to `dir` however `dir` is reached.
+ *
+ * A descriptor names an inode, not a name. Once the directory is open, swapping
+ * any component of the path it was reached through cannot redirect what follows:
+ * the work lands in the directory that was checked, or it fails. Re-opening by
+ * pathname between the check and the write is exactly the window this closes --
+ * `O_NOFOLLOW` on the final component never covered it, because it says nothing
+ * about the parents.
+ *
+ * The directory is still reached by pathname, and a symlinked parent still
+ * resolves. That is deliberate: `~/Statements` pointing at an external drive is
+ * a supported way to keep statements, and `GET /browse` follows symlinked
+ * folders on purpose. What changes is that the resolution happens once, and
+ * every operation after it is anchored to the result rather than repeating it.
+ *
+ * `/proc/self/fd` is how Node reaches a descriptor-relative path at all: it has
+ * no `openat`, and no `openat2` to refuse symlinks outright. Omakei ships as an
+ * Omarchy plugin, so Linux is a safe floor.
+ */
+export async function withDir(dir, fn) {
+  const dh = await open(dir, FS.O_RDONLY | FS.O_DIRECTORY);
+  try {
+    return await fn(`/proc/self/fd/${dh.fd}`);
+  } finally {
+    await dh.close().catch(() => {});
+  }
+}
+
+/**
+ * Create `dir` and any missing parent, anchoring each step to the descriptor of
+ * the directory it is created in.
+ *
+ * `mkdir(dir, { recursive: true })` walks the path by name, so a component
+ * swapped mid-walk moves the rest of the walk with it -- and a state directory
+ * created somewhere else is one every later write then anchors to faithfully.
+ * Each level here is created through its parent's descriptor instead, so the
+ * walk cannot be steered after it starts.
+ *
+ * The state directory is the only directory Omakei creates.
+ */
+async function ensureDir(dir) {
+  let dh = await open(sep, FS.O_RDONLY | FS.O_DIRECTORY);
+  try {
+    for (const part of resolve(dir).split(sep).filter(Boolean)) {
+      const at = `/proc/self/fd/${dh.fd}/${part}`;
+      try {
+        await mkdir(at);
+      } catch (err) {
+        if (err?.code !== "EEXIST") throw err;
+      }
+      const next = await open(at, FS.O_RDONLY | FS.O_DIRECTORY);
+      await dh.close().catch(() => {});
+      dh = next;
+    }
+  } finally {
+    await dh.close().catch(() => {});
+  }
+}
+
+/**
  * Replace a file atomically, through a temp file nobody can predict or preempt.
  *
  * The temp name used to be `<path>.tmp`, which is guessable: anything that got
@@ -211,24 +292,30 @@ export async function readCapped(path, max) {
  *
  * The data is flushed before the rename, so the file the rename publishes is
  * the whole file rather than whatever reached disk first.
+ *
+ * Both the create and the rename go through the destination directory's own
+ * descriptor, so the directory this publishes into is the one that was opened,
+ * whatever happens to its path meanwhile.
  */
 export async function writeAtomic(path, text) {
-  const dir = dirname(path);
-  const tmp = join(dir, `.${basename(path)}.${randomBytes(8).toString("hex")}.tmp`);
-  let fh;
-  try {
-    fh = await open(tmp, FS.O_WRONLY | FS.O_CREAT | FS.O_EXCL | FS.O_NOFOLLOW, 0o600);
-    await fh.writeFile(text, "utf8");
-    await fh.sync();
-    await fh.close();
-    fh = undefined;
-    await rename(tmp, path);
-  } catch (err) {
-    await unlink(tmp).catch(() => {});
-    throw err;
-  } finally {
-    await fh?.close().catch(() => {});
-  }
+  const name = basename(path);
+  const tmpName = `.${name}.${randomBytes(8).toString("hex")}.tmp`;
+  await withDir(dirname(path), async (at) => {
+    let fh;
+    try {
+      fh = await open(`${at}/${tmpName}`, FS.O_WRONLY | FS.O_CREAT | FS.O_EXCL | FS.O_NOFOLLOW, 0o600);
+      await fh.writeFile(text, "utf8");
+      await fh.sync();
+      await fh.close();
+      fh = undefined;
+      await rename(`${at}/${tmpName}`, `${at}/${name}`);
+    } catch (err) {
+      await unlink(`${at}/${tmpName}`).catch(() => {});
+      throw err;
+    } finally {
+      await fh?.close().catch(() => {});
+    }
+  });
 }
 
 /**
@@ -247,19 +334,23 @@ export async function writeAtomic(path, text) {
  * updates.
  */
 export async function bumpRevisionAt(stateDir) {
-  let fh;
   try {
-    await mkdir(stateDir, { recursive: true });
-    fh = await open(
-      join(stateDir, REVISION_FILENAME),
-      FS.O_WRONLY | FS.O_CREAT | FS.O_TRUNC | FS.O_NOFOLLOW,
-      0o600,
-    );
-    await fh.writeFile(`${Date.now()}\n`, "utf8");
+    await ensureDir(stateDir);
+    await withDir(stateDir, async (at) => {
+      let fh;
+      try {
+        fh = await open(
+          `${at}/${REVISION_FILENAME}`,
+          FS.O_WRONLY | FS.O_CREAT | FS.O_TRUNC | FS.O_NOFOLLOW,
+          0o600,
+        );
+        await fh.writeFile(`${Date.now()}\n`, "utf8");
+      } finally {
+        await fh?.close().catch(() => {});
+      }
+    });
   } catch {
     /* nothing the user can do about it, and nothing that should fail a save */
-  } finally {
-    await fh?.close().catch(() => {});
   }
 }
 
@@ -387,7 +478,7 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
 
   async function persist(dir) {
     cached = dir;
-    await mkdir(stateDir, { recursive: true });
+    await ensureDir(stateDir);
     await writeAtomic(statePath, renderStateFile(dir));
     // Attaching or detaching changes which ledger is the current one, which is
     // as much a change to the widget as editing the ledger itself.
@@ -431,12 +522,12 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
       deny(res, 403, "Omakei is reachable from this machine only");
       return true;
     }
-    if (!isAllowedOrigin(req.headers?.origin)) {
+    const method = (req.method ?? "GET").toUpperCase();
+    if (!isAllowedOrigin(req.headers?.origin, method)) {
       deny(res, 403, "Cross-origin requests are refused");
       return true;
     }
 
-    const method = (req.method ?? "GET").toUpperCase();
     const route = pathOnly.slice(API_PREFIX.length) || "/";
 
     try {

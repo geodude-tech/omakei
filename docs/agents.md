@@ -1,4 +1,10 @@
-# Omakei
+# Omakei — how this repository is built
+
+Notes on the shape of this codebase and the reasoning behind it, for anyone —
+person or agent — picking the project up. It describes how Omakei is built; it
+is a record of decisions, not a set of instructions to a reader, and it lives
+under `docs/` rather than at the repository root so that installing the plugin
+does not drop discoverable agent instructions into someone's machine.
 
 A local ledger built from a folder of statements, shaped so an agent can interrogate it, plus a dashboard that agent extends one panel at a time.
 
@@ -16,7 +22,7 @@ Both the Vite dev server and `omakei-serve.mjs` mount that same handler, so deve
 
 Because the server knows the folder's real path, it records it in `~/.local/state/omakei/state.json`. That file's shape is part of the plugin contract. Nobody should have to type a ledger path into widget settings; the `ledgerPath` setting exists only to override the recorded one.
 
-**The widget does not read files.** `Panel.qml` used to open the state file and the ledger through QML `FileView`s, which is a second path onto disk and cannot refuse a symlink, check that it opened a regular file, or stop reading at a size. Worse, `BarWidget.qml` loads the panel eagerly and those reads blocked, so an oversized ledger or a stalled mount hung the whole Omarchy bar at login. The panel now runs `scripts/omakei-read-ledger.mjs` in a `Process` and parses what it prints. Keep it that way: if the widget needs something else off disk, extend the reader rather than adding a `FileView`.
+**The widget does not read files.** `Panel.qml` used to open the state file and the ledger through QML `FileView`s, which is a second path onto disk and cannot refuse a symlink, check that it opened a regular file, or stop reading at a size. Worse, `BarWidget.qml` loads the panel eagerly and those reads blocked, so an oversized ledger or a stalled mount hung the whole Omarchy bar at login. The panel now runs `scripts/omakei-read-ledger.mjs` in a `Process` and parses what it prints. It stays that way: anything else the widget needs off disk goes through that reader rather than a new `FileView`.
 
 The one file the widget still watches is `~/.local/state/omakei/ledger-revision`, which the server rewrites whenever the ledger changes or a folder is attached. It is watched with `preload: false` and is never read — `text()` and `reload()` are never called on it — so it costs a change notification and nothing else. That is what keeps the bar live without pulling an unbounded file into the shell.
 
@@ -32,14 +38,16 @@ answer.
 
 `src/lib/finance/ledger-contract.test.ts` parses the doc and compares it to the
 code, so a renamed category fails `npm test` rather than misleading an agent.
-Keep the doc true; do not duplicate its category table anywhere.
+That test is what keeps the doc true, and the category table it defines is not
+duplicated anywhere else.
 
 ## Panels
 
 Each card on the dashboard is a panel in `src/panels/`, discovered by a glob in
 `src/lib/panels/registry.ts`. Adding one means writing **one file** and rebuilding —
 there is no registry to append to and no import to add. That property is the whole
-point; do not introduce a manifest, an index, or an explicit list.
+point, which is why there is deliberately no manifest, no index, and no explicit
+list.
 
 A panel exports a component and a `meta` (`title`, `span`, `order`), renders the
 card's contents rather than the card, and is read-only — it never imports the store.
@@ -48,7 +56,7 @@ quiet until it has something to say. Each is wrapped in its own error boundary, 
 bad panel costs its own card and nothing else.
 
 `src/panels/README.md` is the contract, written to be read by an agent adding a panel.
-Keep it accurate: it is the file that makes the loop work.
+Its accuracy is what makes the loop work.
 
 Panels are build-time `.tsx` in a dev clone, so an installed plugin user cannot add one
 without cloning. That was chosen over runtime-loaded panels, which would mean executing
@@ -56,39 +64,39 @@ code out of the user's statements folder. See `docs/spec/panel-contract.md`.
 
 ## Rebuilding dist
 
-Rebuild and commit `dist/` whenever a build input changes. `npm run build` stamps `dist/.build-hash` with the git blob hashes of those inputs, and the pre-commit hook fails if the staged `dist/` was built from anything else — a forgotten build otherwise ships new source with the old UI, and `npm run dev` never reads `dist/` so nothing catches it locally. Enable the hook once per clone:
+`dist/` is rebuilt and committed whenever a build input changes. `npm run build` stamps `dist/.build-hash` with the git blob hashes of those inputs, and the pre-commit hook fails if the staged `dist/` was built from anything else — a forgotten build otherwise ships new source with the old UI, and `npm run dev` never reads `dist/` so nothing catches it locally. Enable the hook once per clone:
 
 ```sh
 git config core.hooksPath .githooks
 ```
 
-The stamp hashes the files git is **tracking**, so `git add` a brand-new file before building — a build run while it is still untracked stamps a hash that omits it, and the hook then rejects the commit.
+The stamp hashes the files git is **tracking**, so a brand-new file has to be `git add`ed before the build — a build run while it is still untracked stamps a hash that omits it, and the hook then rejects the commit.
 
-Build inputs are listed in `scripts/build-inputs.mjs`. Tests are excluded; QML and the server scripts ship as source, except `page-shell.mjs`, whose class names Tailwind scans. Dependency bumps are not tracked, so rebuild by hand after changing `package.json`.
+Build inputs are listed in `scripts/build-inputs.mjs`. Tests are excluded; QML and the server scripts ship as source, except `page-shell.mjs`, whose class names Tailwind scans. Dependency bumps are not tracked, so a change to `package.json` needs a manual rebuild.
 
 ## Product
 
 - **The product is the ledger and the loop; the widget is one view.** The bar pill is the hook — it is why Omarchy is the right place to ship this, since its users already have an agent on the machine — but it does not drive design decisions. README is for widget install and use, not app or development setup.
 - **No AI inside the app.** No chat UI, no model calls, no API key. The agent lives in the user's terminal and reads `omakei-ledger.json` directly. Adding an "ask Omakei" box would be a helpful-looking mistake; the app stays deliberately dumb and fast.
-- Shell-loaded files at the repo root: `manifest.json`, `BarWidget.qml`, `Panel.qml`, `Model.js`. `omarchy plugin add` clones the public git tree; never put `node_modules` in a plugin install (symlinks fail validation).
-- Daily viewing stays in the bar popup. Attaching a folder, one-off imports, rules, and the full activity table stay in the editor. Do not rebuild those flows inside the popup.
-- Tailwind's sources are pinned in `src/styles.css` (`source(none)` plus explicit `@source`). Auto-detection would scan the committed `dist/`, so each build would find the previous bundle's class names and the CSS would grow every time. `@source "./"` already covers everything under `src/`, so a new component or panel needs no change; add an `@source` line only for a file **outside** `src/` that emits class names, as `page-shell.mjs` does.
+- Shell-loaded files at the repo root: `manifest.json`, `BarWidget.qml`, `Panel.qml`, `Model.js`. `omarchy plugin add` clones the public git tree, and `node_modules` never belongs in a plugin install (symlinks fail validation).
+- Daily viewing stays in the bar popup. Attaching a folder, one-off imports, rules, and the full activity table stay in the editor, and are not rebuilt inside the popup.
+- Tailwind's sources are pinned in `src/styles.css` (`source(none)` plus explicit `@source`). Auto-detection would scan the committed `dist/`, so each build would find the previous bundle's class names and the CSS would grow every time. `@source "./"` already covers everything under `src/`, so a new component or panel needs no change; only a file **outside** `src/` that emits class names gets its own `@source` line, as `page-shell.mjs` does.
 - The bundle carries neither a theme nor data. `dist/index.html` keeps `<!--omakei:head-->` and `<!--omakei:state-->` placeholders that `scripts/page-shell.mjs` fills per request with the user's Omarchy theme and their ledger, so one committed build looks right on every machine and paints real numbers on the first frame.
-- Serve on `127.0.0.1` only, and keep the Host and Origin guards in `ledger-api.mjs`. This is a personal ledger; nothing else on the network — or in the user's browser — may reach it.
+- The server serves `127.0.0.1` only and refuses to start on a non-loopback `OMAKEI_HOST`; the loopback socket, Host, and Origin guards in `ledger-api.mjs` cover the static routes as well as the API, because the SPA shell is filled with the ledger. This is a personal ledger; nothing else on the network — or in the user's browser — reaches it.
 - Time-to-display, time-to-save, and sync must stay immediate. There is no sample/dummy ledger.
-- Persist `omakei-ledger.json` compactly, through a temp file and a rename. Batch statement merges in one pass; do not yield to the UI between files.
+- `omakei-ledger.json` is persisted compactly, through a temp file and a rename anchored to the destination directory's descriptor. Statement merges are batched in one pass, without yielding to the UI between files.
 
 ## Data
 
-- Personal statements and `omakei-ledger.json` are gitignored. Never commit them.
-- `scripts/check-no-personal-data.mjs` reads staged content in the pre-commit hook and every tracked file in `npm test`. It catches data with a recognisable shape — card numbers, SSNs, routing and account numbers, IBANs, real email addresses, personal phone numbers, street addresses. It **cannot** tell that a merchant, a balance, or a name is yours; that judgement is the rule below, and review is what enforces it. Treat a clean run as one guard passing, not as proof the diff is safe.
+- Personal statements and `omakei-ledger.json` are gitignored, and are never committed.
+- `scripts/check-no-personal-data.mjs` reads staged content in the pre-commit hook and every tracked file in `npm test`. It catches data with a recognisable shape — card numbers, SSNs, routing and account numbers, IBANs, real email addresses, personal phone numbers, street addresses. It **cannot** tell that a merchant, a balance, or a name is yours; that judgement is the rule below, and review is what enforces it. A clean run is one guard passing, not proof the diff is safe.
 - For household-specific words, put them one per line in `.githooks/personal-terms`, which is gitignored — a committed block list would itself be the leak. Matches are reported as `[redacted]`.
-- A line that must keep a matching string carries `omakei:allow-personal`, on that line or the one above it. Use it for a merchant's public support number, not to silence a real hit.
-- Never put personal data in tests, fixtures, comments, or default rules: no household-specific merchants, account numbers, balances, addresses, or family names. Invent neutral values; a test that needs a merchant should use a well-known national chain.
+- A line that must keep a matching string carries `omakei:allow-personal`, on that line or the one above it. It exists for something like a merchant's public support number, not to silence a real hit.
+- Personal data never appears in tests, fixtures, comments, or default rules: no household-specific merchants, account numbers, balances, addresses, or family names. Values there are invented and neutral, and a test that needs a merchant uses a well-known national chain.
 - Statement file extensions are gitignored, so parser fixtures are **inline strings** in `parse.test.ts`, never files.
 - No default ledger path. Nothing is attached until the user picks a folder.
-- Optional dev convenience: `OMAKEI_STATEMENTS_DIR` **seeds** the state an attach would write — it does not override it. `currentDir()` prefers the saved `statementsDir`, so on a machine that has ever attached a folder the variable is ignored and `npm run dev` reads the real ledger. Do not "fix" this by letting the variable win: it persists through the same `persist()` every attach uses, so an overriding seed would rewrite the user's real `state.json` and point their bar pill at dev data.
-- **Develop against a sandbox, not your own ledger:** `npm run dev:isolated` sets `XDG_STATE_HOME` to `.dev/state` alongside `OMAKEI_STATEMENTS_DIR=.dev/statements`. Moving the state dir is what makes the seed apply — there is no saved folder in a fresh one to lose to — and the real `state.json` is neither read nor written. `.dev/` is gitignored. This is env-only: no dev-only code path, same handler, same disk code.
+- Optional dev convenience: `OMAKEI_STATEMENTS_DIR` **seeds** the state an attach would write — it does not override it. `currentDir()` prefers the saved `statementsDir`, so on a machine that has ever attached a folder the variable is ignored and `npm run dev` reads the real ledger. Letting the variable win would not be a fix: it persists through the same `persist()` every attach uses, so an overriding seed would rewrite the user's real `state.json` and point their bar pill at dev data.
+- **Development runs against a sandbox rather than a real ledger.** `npm run dev:isolated` sets `XDG_STATE_HOME` to `.dev/state` alongside `OMAKEI_STATEMENTS_DIR=.dev/statements`. Moving the state dir is what makes the seed apply — there is no saved folder in a fresh one to lose to — and the real `state.json` is neither read nor written. `.dev/` is gitignored. This is env-only: no dev-only code path, same handler, same disk code.
 - Both variables must be exported in the environment. Putting them in `.env.local` does **not** work: Vite does not load `.env` files into `process.env`, and `ledger-api-plugin.mjs` never calls `loadEnv`, so the server never sees them.
 
 ## Commands
@@ -102,6 +110,6 @@ Build inputs are listed in `scripts/build-inputs.mjs`. Tests are excluded; QML a
 
 ## Style
 
-- Match existing QML and React patterns.
+- New code matches the existing QML and React patterns.
 - `Model.js` is QML-compatible ES5 (no modules, no modern syntax the QML JS engine rejects). It is linted under its own ESLint block.
 - Relative imports inside `src/` carry explicit `.ts`/`.tsx` extensions, so any module can be run directly by `node --experimental-strip-types` in a test.
