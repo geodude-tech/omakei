@@ -57,8 +57,8 @@ Panel {
 
   function open() {
     openedFromHotkey = false
-    setCenterHoverRevealSuppressed(false)
     root.controller.show()
+    setCenterHoverRevealSuppressed(false)
     if (!root.ledger) root.refresh()
   }
 
@@ -71,9 +71,15 @@ Panel {
     })
   }
 
+  /**
+   * Hide first, then release the hover suppression. The order is the whole
+   * point: suppression is cosmetic, hiding is not, and a panel that throws on
+   * its way to `hide()` stays open holding the keyboard grab -- no Escape, no
+   * bar click, no `ipc call omakei close`, nothing but a reboot.
+   */
   function close() {
-    setCenterHoverRevealSuppressed(false)
     root.controller.hide()
+    setCenterHoverRevealSuppressed(false)
   }
 
   function toggle() {
@@ -87,8 +93,16 @@ Panel {
     return false
   }
 
+  /**
+   * The bar handed to a plugin exposes this as a `readonly` mirror plus a
+   * setter function; only the host's own Bar has the writable property. Assign
+   * to it and QML throws, which is why the call is never the last thing a
+   * lifecycle function does -- see `close()`.
+   */
   function setCenterHoverRevealSuppressed(value) {
-    if (root.bar && "centerHoverRevealSuppressed" in root.bar)
+    if (root.bar && typeof root.bar.setCenterHoverRevealSuppressed === "function")
+      root.bar.setCenterHoverRevealSuppressed(value)
+    else if (root.bar && "centerHoverRevealSuppressed" in root.bar)
       root.bar.centerHoverRevealSuppressed = value
   }
 
