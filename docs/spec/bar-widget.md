@@ -267,14 +267,18 @@ Verified against the current suite (2026-08-28).
 
 ## Open Questions
 
-**Blocking the write half.** An open editor tab holds the whole ledger in memory
-and writes all of it on its next save, so anything the widget writes while a tab
-is open is silently overwritten — `omakei-categorize.mjs` already carries the
-warning ("Run this with the editor closed"), and a widget write inherits it. The
-only write path is whole-file: `PUT /__omakei/ledger` in the server,
-`writeAtomic` in the CLI. Categorizing from the popup must not ship before this
-is settled — either the CLI routes through the running server when one is up, or
-the editor stops holding the ledger. Nothing else in this section blocks anything.
+**The write half is no longer blocked.** An open editor tab used to hold the
+whole ledger in memory and reinstate it on its next save, so anything written
+underneath — a rule from `omakei-categorize.mjs`, and prospectively anything the
+widget wrote — disappeared silently. That is fixed: a save now says which
+version of the ledger it was derived from and is refused if the file has moved
+on, and the editor merges with whatever beat it there and retries. See
+[ledger-server.md](ledger-server.md), "The ledger has more than one writer."
+
+What this means for the widget is that invoking `omakei-categorize.mjs` from the
+popup is safe with the editor open, which it was not before. The CLI keeps a
+narrow window of its own (recorded in that spec's Open Questions) that a widget
+write inherits; it is microseconds rather than minutes, and the CLI retries.
 
 1. **No test proves the no-hang-at-login property.** It is the reason the reader
    exists, and it is only checked by hand. A test that points the reader at a

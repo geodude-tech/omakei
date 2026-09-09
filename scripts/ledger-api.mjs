@@ -16,7 +16,7 @@
  */
 import { constants as FS } from "node:fs";
 import { mkdir, open, readdir, rename, stat, unlink } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
@@ -26,6 +26,23 @@ export const LEDGER_FILENAME = "omakei-ledger.json";
 export const REVISION_FILENAME = "ledger-revision";
 
 export const MAX_LEDGER_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Identity of the ledger file as it sits on disk right now.
+ *
+ * Hashing the bytes rather than trusting an mtime or a counter: two writes in
+ * the same millisecond are indistinguishable by clock, and the file has more
+ * than one writer. `omakei-categorize.mjs` writes it directly, the editor
+ * writes it through `PUT /ledger`, and neither knows about the other. The hash
+ * is what lets a write say which version it was derived from.
+ *
+ * An absent ledger hashes to "", which is a real value a caller can present:
+ * "I read no ledger, and expect there still to be none."
+ */
+export function ledgerEtag(raw) {
+  if (!raw || raw.length === 0) return "";
+  return createHash("sha256").update(raw).digest("hex");
+}
 const MAX_STATEMENT_BYTES = 32 * 1024 * 1024;
 /** The state file holds one small JSON object; anything larger is not ours. */
 export const MAX_STATE_BYTES = 64 * 1024;
@@ -487,29 +504,55 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
 
   const bumpRevision = () => bumpRevisionAt(stateDir);
 
-  async function readLedger(dir) {
+  /**
+   * The ledger as it is on disk, with the etag of the exact bytes it parsed
+   * from. The two travel together on purpose: an etag taken from a second read
+   * could name a version the caller never saw.
+   */
+  async function readLedgerAt(dir) {
     // A ledger larger than the cap is refused on the way in as well as on the
     // way out: this runs on every /state call, into a long-lived server.
     const raw = await readCapped(join(dir, LEDGER_FILENAME), MAX_LEDGER_BYTES);
-    if (!raw) return null;
+    const etag = ledgerEtag(raw);
+    if (!raw) return { ledger: null, etag };
     try {
       const parsed = JSON.parse(raw.toString("utf8"));
-      return isLedgerPayload(parsed) ? parsed : null;
+      return { ledger: isLedgerPayload(parsed) ? parsed : null, etag };
     } catch {
-      return null;
+      return { ledger: null, etag };
     }
+  }
+
+  /**
+   * Writes are serialized. Reading the etag and writing the file are two awaits,
+   * and without this a second request can pass the check in the gap the first
+   * one left — which is the very thing the check exists to stop. Two editor
+   * tabs are enough to reach it.
+   */
+  let writeQueue = Promise.resolve();
+  function serialize(fn) {
+    const run = writeQueue.then(fn, fn);
+    // Keep the chain alive whatever this write did, but never leave an
+    // unhandled rejection behind it.
+    writeQueue = run.then(
+      () => {},
+      () => {},
+    );
+    return run;
   }
 
   /** One round-trip with everything the editor needs to paint. */
   async function stateBody() {
     const dir = await currentDir();
     if (!dir || !(await isDirectory(dir))) {
-      return { folder: null, ledger: null, ledgerPath: "", home };
+      return { folder: null, ledger: null, ledgerPath: "", ledgerEtag: "", home };
     }
+    const { ledger, etag } = await readLedgerAt(dir);
     return {
       folder: { path: dir, name: basename(dir) },
-      ledger: await readLedger(dir),
+      ledger,
       ledgerPath: join(dir, LEDGER_FILENAME),
+      ledgerEtag: etag,
       home,
     };
   }
@@ -691,9 +734,43 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
           deny(res, 400, "Invalid ledger");
           return true;
         }
-        await writeAtomic(join(dir, LEDGER_FILENAME), `${JSON.stringify(parsed)}\n`);
-        await bumpRevision();
-        json(res, 200, { ok: true });
+
+        /**
+         * A save says which version it was derived from, and is refused if the
+         * file has moved on since. The editor holds the whole ledger in memory
+         * for as long as its tab is open, so without this its next save quietly
+         * reinstates everything the file gained in the meantime -- a rule added
+         * by `omakei-categorize.mjs`, or a save from a second tab. The lost
+         * write could be minutes old; nothing about it looks like a race.
+         *
+         * The refusal carries the current ledger, so a client can merge and
+         * retry without a second round-trip. "" is the etag of no ledger yet.
+         */
+        const ifMatch = req.headers?.["if-match"];
+        if (typeof ifMatch !== "string") {
+          deny(res, 428, "A ledger write must carry If-Match");
+          return true;
+        }
+
+        const body = await serialize(async () => {
+          const current = await readLedgerAt(dir);
+          if (ifMatch !== current.etag) {
+            return {
+              status: 412,
+              payload: {
+                error: "The ledger changed since you read it",
+                etag: current.etag,
+                ledger: current.ledger,
+              },
+            };
+          }
+          const text = `${JSON.stringify(parsed)}\n`;
+          await writeAtomic(join(dir, LEDGER_FILENAME), text);
+          await bumpRevision();
+          return { status: 200, payload: { ok: true, etag: ledgerEtag(Buffer.from(text)) } };
+        });
+
+        json(res, body.status, body.payload);
         return true;
       }
 

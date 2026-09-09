@@ -15,13 +15,20 @@
  *
  * The rule takes effect immediately — every transaction is re-categorized with
  * the shipped engine, the ledger is rewritten, and the bar's revision file is
- * bumped. Run this with the editor closed: an open tab holds the ledger in
- * memory and overwrites the file on its next edit. Reload the tab afterwards.
+ * bumped.
+ *
+ * Safe to run with the editor open. It used to not be: an open tab held the
+ * ledger in memory and reinstated it on its next save, so a rule added here
+ * vanished without anything reporting it. Now a save carries the version it was
+ * derived from and is refused if the file has moved on, and this command
+ * re-checks immediately before writing and retries if it lost. The editor picks
+ * the change up on its next save; reload the tab to see it sooner.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   bumpRevisionAt,
+  ledgerEtag,
   LEDGER_FILENAME,
   MAX_LEDGER_BYTES,
   MAX_STATE_BYTES,
@@ -106,7 +113,27 @@ function takeFlag(args, flag) {
   return true;
 }
 
-export async function run(argv, { env = process.env, home = homedir() } = {}) {
+/** Signals that the file moved under us between the read and the write. */
+const STALE = Symbol("stale");
+
+/**
+ * The editor writes this same file, so a read here can be out of date by the
+ * time the write lands. Re-read and re-apply rather than overwrite: the whole
+ * operation is a rule upsert on the current contents, so redoing it against
+ * fresh contents is the same request, correctly answered.
+ *
+ * Three attempts, then give up rather than spin. Losing three times in a row
+ * means something is writing continuously, and the honest answer is to say so.
+ */
+export async function run(argv, options = {}) {
+  for (let i = 0; i < 3; i++) {
+    const result = await attempt(argv, options);
+    if (result !== STALE) return result;
+  }
+  return fail("The ledger kept changing while this ran. Close the editor and try again.");
+}
+
+async function attempt(argv, { env = process.env, home = homedir() } = {}) {
   const args = [...argv];
   const list = takeFlag(args, "--list");
   const dryRun = takeFlag(args, "--dry-run");
@@ -117,6 +144,7 @@ export async function run(argv, { env = process.env, home = homedir() } = {}) {
 
   const raw = await readCapped(path, MAX_LEDGER_BYTES);
   if (!raw) return fail(`Could not read ${path}`);
+  const readEtag = ledgerEtag(raw);
 
   let snapshot;
   try {
@@ -156,7 +184,7 @@ export async function run(argv, { env = process.env, home = homedir() } = {}) {
       return fail(`No user rule matches "${pattern}".`);
     }
     return commit({
-      env, home, path, snapshot, users: nextUsers,
+      env, home, path, snapshot, users: nextUsers, readEtag,
       after: derive(snapshot.transactions, nextUsers),
       before, dryRun, note: `Removed rule "${pattern.trim()}"`,
     });
@@ -173,26 +201,39 @@ export async function run(argv, { env = process.env, home = homedir() } = {}) {
 
   const nextUsers = upsertRule(users, pattern, categoryId);
   return commit({
-    env, home, path, snapshot, users: nextUsers,
+    env, home, path, snapshot, users: nextUsers, readEtag,
     after: derive(snapshot.transactions, nextUsers),
     before, dryRun, note: `Rule "${pattern.trim()}" → ${categoryId}`,
   });
 }
 
-async function commit({ env, home, path, snapshot, users, after, before, dryRun, note }) {
+async function commit({ env, home, path, snapshot, users, after, before, dryRun, note, readEtag }) {
+  if (dryRun) {
+    report(note, before, after);
+    process.stdout.write("(dry run — nothing written)\n");
+    return 0;
+  }
+
+  // Last look before writing. This does not lock the file — nothing here can —
+  // so it narrows the window rather than closing it. What it does remove is the
+  // long one: a rule computed against a ledger the editor replaced while
+  // someone was reading the `--list` output and deciding.
+  const current = await readCapped(path, MAX_LEDGER_BYTES);
+  if (ledgerEtag(current) !== readEtag) return STALE;
+
+  await writeAtomic(path, serialize(snapshot, after, users));
+  await bumpRevisionAt(stateDirFor(env, home));
+  report(note, before, after);
+  return 0;
+}
+
+function report(note, before, after) {
   const changed = retagged(before, after);
   const stillNull = after.filter((t) => !t.categoryId).length;
   process.stdout.write(`${note}\n`);
   process.stdout.write(
     `${changed} transaction${changed === 1 ? "" : "s"} re-tagged, ${stillNull} still uncategorized\n`,
   );
-  if (dryRun) {
-    process.stdout.write("(dry run — nothing written)\n");
-    return 0;
-  }
-  await writeAtomic(path, serialize(snapshot, after, users));
-  await bumpRevisionAt(stateDirFor(env, home));
-  return 0;
 }
 
 if (process.argv[1]?.endsWith("omakei-categorize.mjs")) {
