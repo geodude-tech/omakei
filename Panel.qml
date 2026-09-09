@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Shapes
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -57,8 +58,8 @@ Panel {
 
   function open() {
     openedFromHotkey = false
-    setCenterHoverRevealSuppressed(false)
     root.controller.show()
+    setCenterHoverRevealSuppressed(false)
     if (!root.ledger) root.refresh()
   }
 
@@ -71,9 +72,15 @@ Panel {
     })
   }
 
+  /**
+   * Hide first, then release the hover suppression. The order is the whole
+   * point: suppression is cosmetic, hiding is not, and a panel that throws on
+   * its way to `hide()` stays open holding the keyboard grab -- no Escape, no
+   * bar click, no `ipc call omakei close`, nothing but a reboot.
+   */
   function close() {
-    setCenterHoverRevealSuppressed(false)
     root.controller.hide()
+    setCenterHoverRevealSuppressed(false)
   }
 
   function toggle() {
@@ -87,8 +94,16 @@ Panel {
     return false
   }
 
+  /**
+   * The bar handed to a plugin exposes this as a `readonly` mirror plus a
+   * setter function; only the host's own Bar has the writable property. Assign
+   * to it and QML throws, which is why the call is never the last thing a
+   * lifecycle function does -- see `close()`.
+   */
   function setCenterHoverRevealSuppressed(value) {
-    if (root.bar && "centerHoverRevealSuppressed" in root.bar)
+    if (root.bar && typeof root.bar.setCenterHoverRevealSuppressed === "function")
+      root.bar.setCenterHoverRevealSuppressed(value)
+    else if (root.bar && "centerHoverRevealSuppressed" in root.bar)
       root.bar.centerHoverRevealSuppressed = value
   }
 
@@ -304,6 +319,118 @@ Panel {
             font.family: root.contentFontFamily
             font.pixelSize: 42
             font.bold: true
+          }
+
+          /**
+           * The month's spending as a pace line: cumulative spend, day 1 to the
+           * last day of the month. Flat stretches are days nothing went out; a
+           * steep run is a week that got away. `Model.dailySpend` does the
+           * arithmetic, this only maps it onto the box.
+           */
+          Item {
+            id: spark
+            width: parent.width
+            height: Style.space(60)
+            visible: root.monthSummary.hasData
+
+            readonly property var series: Model.dailySpend(
+              root.ledger && root.ledger.transactions, root.viewMonth)
+            /** Never divide by zero, and never let one cent fill the box. */
+            readonly property real peak: Math.max(1, spark.series.total)
+            readonly property real lastY: {
+              var days = spark.series.days
+              if (!days || days.length === 0) return spark.height
+              return spark.plot(days[days.length - 1].cumulative)
+            }
+
+            /** Headroom, so the last point is a dot on the line and not on the rim. */
+            readonly property real topInset: Style.space(5)
+            readonly property real dotSize: Style.space(7)
+            /** The line stops where the dot's centre goes, so the two agree. */
+            readonly property real rightInset: spark.dotSize / 2
+
+            function plot(value) {
+              var usable = spark.height - spark.topInset
+              return spark.height - (value / spark.peak) * usable
+            }
+
+            /**
+             * The line starts at zero on the baseline, before day 1, so a big
+             * first-of-the-month debit reads as the climb it is. Without that
+             * origin the curve begins wherever rent left it and the whole month
+             * looks flat.
+             *
+             * `closed` walks back along the baseline so the area can be filled.
+             */
+            function points(closed) {
+              var days = spark.series.days
+              var out = []
+              if (!days || days.length < 2 || spark.width <= 0) return out
+              var steps = days.length
+              var span = spark.width - spark.rightInset
+              out.push(Qt.point(0, spark.height))
+              for (var i = 0; i < steps; i++) {
+                out.push(Qt.point(span * ((i + 1) / steps),
+                                  spark.plot(days[i].cumulative)))
+              }
+              if (closed) {
+                out.push(Qt.point(span, spark.height))
+                out.push(Qt.point(0, spark.height))
+              }
+              return out
+            }
+
+            Rectangle {
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.bottom: parent.bottom
+              height: 1
+              color: Style.selectedFillFor(root.contentForeground, Color.accent)
+            }
+
+            Shape {
+              anchors.fill: parent
+              preferredRendererType: Shape.CurveRenderer
+
+              ShapePath {
+                strokeWidth: 0
+                strokeColor: "transparent"
+                fillGradient: LinearGradient {
+                  x1: 0; y1: 0
+                  x2: 0; y2: spark.height
+                  GradientStop {
+                    position: 0.0
+                    color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.38)
+                  }
+                  GradientStop {
+                    position: 1.0
+                    color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.0)
+                  }
+                }
+                PathPolyline { path: spark.points(true) }
+              }
+
+              ShapePath {
+                strokeColor: Color.accent
+                strokeWidth: 2
+                capStyle: ShapePath.RoundCap
+                joinStyle: ShapePath.RoundJoin
+                fillColor: "transparent"
+                PathPolyline { path: spark.points(false) }
+              }
+            }
+
+            // Where the month has got to. Inset by its own width so the dot
+            // sits fully inside the box instead of half over the edge.
+            Rectangle {
+              width: spark.dotSize
+              height: width
+              radius: width / 2
+              color: Color.accent
+              x: spark.width - spark.rightInset - width / 2
+              y: spark.lastY - height / 2
+              visible: spark.series.days && spark.series.days.length > 1
+            }
           }
 
           Text {

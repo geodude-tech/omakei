@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = readFileSync(join(ROOT, "Model.js"), "utf8");
 const Model = new Function(
-  `${src}\nreturn { editorUrl, editorQuery, emptySummary, summarize, parseSetAsides, openEditorCommand, shellQuote, revisionFilePath, parseLedger, parseReaderOutput, latestMonth, openingMonth };`,
+  `${src}\nreturn { editorUrl, editorQuery, emptySummary, summarize, parseSetAsides, openEditorCommand, shellQuote, revisionFilePath, parseLedger, parseReaderOutput, latestMonth, openingMonth, dailySpend, daysInMonth };`,
 )();
 
 test("editorUrl carries the month the popup was showing", () => {
@@ -188,4 +188,45 @@ test("parseLedger still parses a raw ledger, unchanged", () => {
   );
   assert.equal(parsed.transactions.length, 1);
   assert.equal(Model.parseLedger("nonsense"), null);
+});
+
+test("daysInMonth spans the real month, leap year included", () => {
+  assert.equal(Model.daysInMonth("2026-08"), 31);
+  assert.equal(Model.daysInMonth("2026-09"), 30);
+  assert.equal(Model.daysInMonth("2026-02"), 28);
+  assert.equal(Model.daysInMonth("2024-02"), 29, "2024 is a leap year");
+  assert.equal(Model.daysInMonth("nonsense"), 30, "an unparseable month must not throw");
+});
+
+test("dailySpend runs a month's spend up day by day", () => {
+  const transactions = [
+    { date: "2026-08-01", amount: -100 },
+    { date: "2026-08-01", amount: -50 },
+    { date: "2026-08-03", amount: -25 },
+    { date: "2026-08-03", amount: 3000 }, // income is not spend
+    { date: "2026-08-05", amount: -25, categoryId: "transfers" }, // nor is a transfer
+    { date: "2026-07-31", amount: -900 }, // nor is another month
+  ];
+  const series = Model.dailySpend(transactions, "2026-08");
+
+  assert.equal(series.days.length, 31, "every day of the month gets a point");
+  assert.equal(series.total, 175);
+  assert.equal(series.maxDaily, 150);
+  assert.equal(series.days[0].spend, 150);
+  assert.equal(series.days[0].cumulative, 150);
+  assert.equal(series.days[1].spend, 0, "a day with nothing still gets a point");
+  assert.equal(series.days[1].cumulative, 150, "and holds the running total flat");
+  assert.equal(series.days[2].cumulative, 175);
+  assert.equal(series.days[30].cumulative, 175, "the line runs to the end of the month");
+});
+
+test("dailySpend is safe on an empty or missing ledger", () => {
+  const empty = Model.dailySpend(null, "2026-08");
+  assert.equal(empty.days.length, 31);
+  assert.equal(empty.total, 0);
+  assert.equal(empty.maxDaily, 0);
+  assert.equal(
+    empty.days.every((d) => d.cumulative === 0),
+    true,
+  );
 });

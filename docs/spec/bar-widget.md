@@ -1,6 +1,8 @@
 # Spec: Bar Widget
 
-_Status: documents existing behavior as of 2026-08-28. Traces to `docs/intent/omakei.md`._
+_Status: documents existing behavior as of 2026-08-28. "Where a capability belongs"
+and the write half of **Boundaries** are forward — agreed 2026-09-08, not yet built.
+Traces to `docs/intent/omakei.md`._
 
 ## Objective
 
@@ -152,12 +154,69 @@ dead page.
 `formatMoney(net, { sign: true, compact: true })`. The button goes `active`
 (urgent styling) when net is below `−0.005`.
 
+## Where a capability belongs
+
+### The widget is a front-end to a CLI
+
+This is the Omarchy convention, not a rule invented here. Every first-party
+panel in `omarchy-shell` mutates something, and not one of them implements the
+mutation. `plugins/panels/monitor` shells out to `omarchy-brightness-display`,
+`omarchy-hyprland-monitor-scaling`, and `omarchy-display-text-size`, then re-reads
+through `omarchy-monitor-state`. Network, bluetooth, tailscale, audio, and power
+have the same shape, and they take real input on the way — `TextField`,
+dropdowns, a passphrase field with `echoMode`.
+
+So the house rule is not "a panel does not write." It is:
+
+> **A panel is a front-end to a CLI. One value, one command. Never a session.**
+
+Brightness percent, scale factor, text size, one passphrase. That is the ceiling,
+and it is the ceiling here too. Omakei already has both halves —
+`omakei-read-ledger.mjs` is the read, `omakei-categorize.mjs` is the write — the
+widget simply does not call the second one yet.
+
+The point of routing through a CLI is not tidiness. A command that works
+standalone from a terminal is testable in Node, usable by an agent, and reviewable
+on its own; a write inlined into QML is none of those, and it runs inside the
+shell process where a mistake takes the bar down with it.
+
+### The three-way split
+
+- **The agent** answers what only computation can answer — drift, six-month
+  trends, "which categories are creeping up." This is the intent's whole thesis:
+  one clean file, and a harness already on the machine. Analysis is not the
+  widget's job, and mostly not the editor's either.
+- **The editor** does what needs a session — attaching a folder, importing a
+  month of statements, reviewing what deduped.
+- **The widget** does what only *the person* can answer — the number at a glance,
+  and the one ambiguity a machine cannot resolve: what is `SQ *PORCH SUPPLY`?
+
+That last line is the case for categorizing in the popup. It is not convenience.
+It is the only interaction where the user is the required input.
+
+### What that costs
+
+The test is one value, one command: can it be finished in a single gesture, by
+someone glancing at the bar?
+
+| Capability | Home | Why |
+|---|---|---|
+| Categorize an unknown merchant | **Widget** | One value, one command; `omakei-categorize.mjs` already does it |
+| Add a reserved / set-aside | **Widget**, one at a time | Two fields — the passphrase pattern. Needs an `omakei-set-aside` CLI first; there is none |
+| Attach a folder | Editor | Browsing a filesystem is a session |
+| Import statements | Editor | Many files, dedupe, warnings to review |
+| The rules table | Terminal | `omakei-categorize.mjs --list` / `--remove` already cover it. A table is not a panel |
+| Charts, drift, dashboard panels | Editor / agent | Reading depth, not glancing |
+| The full activity list | Editor | The popup's eight-row cap is the right call |
+
 ## Testing Strategy
 
 - `model.test.mjs` — `openingMonth` (all four fallbacks), `summarize`,
   `latestMonth`, `editorUrl`/`editorQuery`, `openEditorCommand` (trailing slash,
   no plugin dir), `parseReaderOutput` (half-written pipe, wrong version),
-  `revisionFilePath`.
+  `revisionFilePath`, `daysInMonth` (leap February, unparseable month),
+  `dailySpend` (every day present, income and transfers and other months
+  excluded, empty ledger safe).
 - `omakei-read-ledger.test.mjs` — the reader resolves the path from the state
   file or the override, always exits 0, always prints valid JSON.
 - `check-plugin.mjs` — `omarchy-plugin-validate` on the shell files (skipped when
@@ -170,17 +229,25 @@ dead page.
 - Read the ledger only through `scripts/omakei-read-ledger.mjs`, asynchronously.
 - Watch `ledger-revision` with `preload: false` and never read it.
 - Keep `Model.js` ES5 and testable; keep the `.qml` files thin.
-- Keep daily viewing in the popup — do not rebuild attach, import, rules, or the
-  full activity table there (docs/agents.md).
+- Change anything on disk only by running a CLI that already works standalone
+  from a terminal, `Process`-detached, and then re-reading. If the capability has
+  no CLI, the CLI is the first half of the work.
+- Keep daily viewing in the popup — do not rebuild attach, import, the rules
+  table, or the full activity table there (docs/agents.md).
 
 **Ask first:**
 - Adding anything the widget reads off disk (extend the reader, and say why).
+- Adding a write the widget can trigger — name the CLI it runs, and check it
+  against "one value, one command."
 - Adding a manifest setting.
 - A timer or any periodic work.
 
 **Never:**
 - Add a `FileView` onto the ledger or the state file.
-- Let the widget write anything.
+- Write to the ledger from inside QML — no file writing, no HTTP to the server.
+  The widget invokes; the CLI writes.
+- Put a session in the popup: multi-step flows, a table to edit, anything the
+  user would sit down for.
 - Put personal data in `Model.js` fixtures or defaults.
 - Make the widget the design driver — it is the hook.
 
@@ -200,6 +267,15 @@ Verified against the current suite (2026-08-28).
 
 ## Open Questions
 
+**Blocking the write half.** An open editor tab holds the whole ledger in memory
+and writes all of it on its next save, so anything the widget writes while a tab
+is open is silently overwritten — `omakei-categorize.mjs` already carries the
+warning ("Run this with the editor closed"), and a widget write inherits it. The
+only write path is whole-file: `PUT /__omakei/ledger` in the server,
+`writeAtomic` in the CLI. Categorizing from the popup must not ship before this
+is settled — either the CLI routes through the running server when one is up, or
+the editor stops holding the ledger. Nothing else in this section blocks anything.
+
 1. **No test proves the no-hang-at-login property.** It is the reason the reader
    exists, and it is only checked by hand. A test that points the reader at a
    FIFO and asserts it still exits 0 within a timeout would guard it.
@@ -209,6 +285,15 @@ Verified against the current suite (2026-08-28).
 3. **The `appUrl` setting defaults to `http://127.0.0.1:8080/` in two places**
    (`manifest.json` and `Panel.qml`). If the server's default port ever changes,
    both move. Worth a single source.
-4. **Middle-click to reload is undiscoverable.** It is in the README but there is
+4. **`Model.dailySpend` is a second implementation of
+   `src/lib/finance/summaries.ts`'s `dailySpend`.** `Model.js` is ES5 loaded by
+   the QML engine and cannot import TypeScript, so the widget cannot share the
+   original — the same reason `Model.summarize` already restates `monthSummary`
+   and `categoryTotals`. It is precedent, not an accident, but it is still two
+   copies of one piece of arithmetic that can drift: the QML one adds
+   `cumulative` and takes `(transactions, month)` to match `Model.summarize`,
+   while the TypeScript one takes `(month, rows)`. Both are tested
+   independently. If a third copy ever appears, generate them instead.
+5. **Middle-click to reload is undiscoverable.** It is in the README but there is
    no affordance. Given the revision-file watch, a manual reload is rarely
    needed — consider whether it earns its keep.
