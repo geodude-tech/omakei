@@ -6,7 +6,7 @@
  * the bar widget find the ledger without anyone typing a path into settings.
  */
 import type { LedgerSnapshot } from "./ledger-file.ts";
-import { parseLedgerData } from "./ledger-file.ts";
+import { mergeSnapshots, parseLedgerData } from "./ledger-file.ts";
 
 export const API_PREFIX = "/__omakei";
 
@@ -16,6 +16,8 @@ export type ServerState = {
   folder: AttachedFolder | null;
   ledger: LedgerSnapshot | null;
   ledgerPath: string;
+  /** Version of the ledger file these bytes came from; "" when there is none. */
+  ledgerEtag: string;
   home: string;
 };
 
@@ -32,7 +34,13 @@ export type BrowseResult = {
   places: Array<{ name: string; path: string }>;
 };
 
-const EMPTY_STATE: ServerState = { folder: null, ledger: null, ledgerPath: "", home: "" };
+const EMPTY_STATE: ServerState = {
+  folder: null,
+  ledger: null,
+  ledgerPath: "",
+  ledgerEtag: "",
+  home: "",
+};
 
 declare global {
   interface Window {
@@ -65,6 +73,7 @@ function normalizeState(raw: unknown): ServerState {
     folder,
     ledger: data.ledger ? parseLedgerData(data.ledger) : null,
     ledgerPath: typeof data.ledgerPath === "string" ? data.ledgerPath : "",
+    ledgerEtag: typeof data.ledgerEtag === "string" ? data.ledgerEtag : "",
     home: typeof data.home === "string" ? data.home : "",
   };
 }
@@ -88,17 +97,30 @@ export async function readState(): Promise<ServerState> {
 }
 
 export async function attachFolder(path: string): Promise<ServerState> {
-  return normalizeState(
-    await request<unknown>("/folder", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path }),
-    }),
+  return adopt(
+    normalizeState(
+      await request<unknown>("/folder", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path }),
+      }),
+    ),
   );
 }
 
 export async function detachFolder(): Promise<ServerState> {
-  return normalizeState(await request<unknown>("/folder", { method: "DELETE" }));
+  return adopt(normalizeState(await request<unknown>("/folder", { method: "DELETE" })));
+}
+
+/**
+ * Attaching or detaching swaps which ledger is current, so the version the next
+ * save writes against comes from the new folder, not the old one. Done here
+ * rather than at the call sites: a caller that forgot would not fail until the
+ * first save, and would fail as a refused write rather than as this mistake.
+ */
+function adopt(state: ServerState): ServerState {
+  setLedgerEtag(state.ledgerEtag);
+  return state;
 }
 
 export function browseFolders(path: string): Promise<BrowseResult> {
@@ -115,13 +137,58 @@ export function readStatement(path: string): Promise<{ path: string; text: strin
   );
 }
 
+/**
+ * The version of the ledger this tab last saw, carried on every save.
+ *
+ * The page holds the whole ledger in memory for as long as it is open, so
+ * without this its next save would reinstate everything the file gained
+ * meanwhile — a rule from `omakei-categorize.mjs`, or another tab's edit.
+ */
+let ledgerEtag = "";
+
+export function setLedgerEtag(etag: string): void {
+  ledgerEtag = etag;
+}
+
+type LedgerWriteResult = {
+  status: number;
+  etag?: string;
+  ledger?: unknown;
+};
+
+async function putLedger(snapshot: LedgerSnapshot, ifMatch: string): Promise<LedgerWriteResult> {
+  const res = await fetch(`${API_PREFIX}/ledger`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", "if-match": ifMatch },
+    body: `${JSON.stringify(snapshot)}\n`,
+  });
+  const body = (await res.json().catch(() => null)) as LedgerWriteResult | null;
+  return { status: res.status, etag: body?.etag, ledger: body?.ledger };
+}
+
+/**
+ * Save, and if the file moved on underneath us, merge with what beat us there
+ * and save that instead.
+ *
+ * One retry, not a loop. A second refusal means something is writing faster
+ * than we can reconcile, and hammering the file is worse than leaving the edit
+ * in memory for the next save to carry.
+ */
 export async function writeLedger(snapshot: LedgerSnapshot): Promise<boolean> {
   try {
-    await request<{ ok: boolean }>("/ledger", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: `${JSON.stringify(snapshot)}\n`,
-    });
+    const first = await putLedger(snapshot, ledgerEtag);
+    if (first.status === 200) {
+      ledgerEtag = first.etag ?? "";
+      return true;
+    }
+    if (first.status !== 412) return false;
+
+    const theirs = parseLedgerData(first.ledger);
+    if (!theirs || typeof first.etag !== "string") return false;
+
+    const merged = await putLedger(mergeSnapshots(snapshot, theirs), first.etag);
+    if (merged.status !== 200) return false;
+    ledgerEtag = merged.etag ?? "";
     return true;
   } catch {
     return false;

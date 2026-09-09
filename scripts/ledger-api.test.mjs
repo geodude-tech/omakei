@@ -82,6 +82,23 @@ async function serve(home) {
   };
 }
 
+/**
+ * A guarded ledger write.
+ *
+ * Every save has to say which version it was derived from, so a test that is
+ * not itself about concurrency asks the server what is current and writes
+ * against that — which is exactly what the editor does. Pass `ifMatch`
+ * explicitly to write against a version deliberately.
+ */
+async function putLedger(s, ledger, ifMatch) {
+  const etag = ifMatch ?? (await (await s.call("/state")).json()).ledgerEtag;
+  return s.call("/ledger", {
+    method: "PUT",
+    headers: { "content-type": "application/json", "if-match": etag },
+    body: JSON.stringify(ledger),
+  });
+}
+
 test("attaching a folder makes the ledger readable, writable, and findable", async () => {
   const { home, statements } = tempTree();
   writeFileSync(
@@ -131,11 +148,7 @@ test("attaching a folder makes the ledger readable, writable, and findable", asy
       rules: [],
       setAsides: [],
     };
-    const put = await s.call("/ledger", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(ledger),
-    });
+    const put = await putLedger(s, ledger);
     assert.equal(put.status, 200);
     const onDisk = JSON.parse(readFileSync(join(statements, "omakei-ledger.json"), "utf8"));
     assert.equal(onDisk.transactions[0].id, "a");
@@ -530,11 +543,7 @@ test("a symlink at the predictable temp path cannot capture the write", async ()
     // This is exactly the old temp name. Under the previous writeAtomic the
     // ledger JSON went straight through it and overwrote the canary.
     symlinkSync(canary, join(statements, "omakei-ledger.json.tmp"));
-    const put = await s.call("/ledger", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ version: 1, transactions: [], rules: [], selectedMonth: "2026-08" }),
-    });
+    const put = await putLedger(s, { version: 1, transactions: [], rules: [], selectedMonth: "2026-08" });
     assert.equal(put.status, 200);
     assert.equal(readFileSync(canary, "utf8"), "untouched", "the write must not follow the planted link");
     assert.match(readFileSync(join(statements, "omakei-ledger.json"), "utf8"), /"version":1/);
@@ -551,11 +560,7 @@ test("a symlinked destination is replaced, not written through", async () => {
   try {
     const dest = join(statements, "omakei-ledger.json");
     symlinkSync(canary, dest);
-    const put = await s.call("/ledger", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ version: 1, transactions: [], rules: [], selectedMonth: "2026-08" }),
-    });
+    const put = await putLedger(s, { version: 1, transactions: [], rules: [], selectedMonth: "2026-08" });
     assert.equal(put.status, 200);
     assert.equal(readFileSync(canary, "utf8"), "untouched");
     assert.equal(statSync(dest).isSymbolicLink?.() ?? false, false);
@@ -585,11 +590,7 @@ test("no temp file is left behind by a successful write", async () => {
   const { home, statements } = tempTree();
   const s = await attached(home, statements);
   try {
-    await s.call("/ledger", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ version: 1, transactions: [], rules: [], selectedMonth: "2026-08" }),
-    });
+    await putLedger(s, { version: 1, transactions: [], rules: [], selectedMonth: "2026-08" });
     const { readdirSync } = await import("node:fs");
     const leftovers = readdirSync(statements).filter((f) => f.endsWith(".tmp"));
     assert.deepEqual(leftovers, []);
@@ -612,11 +613,7 @@ test("the revision file changes whenever the widget would need to re-read", asyn
     assert.match(afterAttach, /^\d+\n$/, "the token is only there to make the file change");
 
     await new Promise((r) => setTimeout(r, 2));
-    await s.call("/ledger", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ version: 1, transactions: [], rules: [], selectedMonth: "2026-08" }),
-    });
+    await putLedger(s, { version: 1, transactions: [], rules: [], selectedMonth: "2026-08" });
     const afterSave = readFileSync(s.api.revisionPath, "utf8");
     assert.notEqual(afterSave, afterAttach, "saving the ledger has to move it");
 
@@ -770,4 +767,114 @@ test("path and header helpers", () => {
 
   assert.match(renderStateFile("/s"), /"ledgerPath":"\/s\/omakei-ledger\.json"/);
   assert.equal(parseStateFile(renderStateFile("")), null);
+});
+
+/* --------------------------------------------------- the lost-update guard */
+
+test("a save derived from a stale ledger is refused, and changes nothing", async () => {
+  const { home, statements } = tempTree();
+  const s = await attached(home, statements);
+  const path = join(statements, "omakei-ledger.json");
+  try {
+    const base = { version: 1, selectedMonth: "2026-08", transactions: [], rules: [], setAsides: [] };
+    const first = await putLedger(s, base);
+    assert.equal(first.status, 200);
+    const staleEtag = (await first.json()).etag;
+
+    // Something else writes the file — this is `omakei-categorize.mjs`, which
+    // owns the same file and knows nothing about the server.
+    const theirs = { ...base, rules: [{ id: "r1", pattern: "co-op", categoryId: "groceries", createdAt: 1, source: "user" }] };
+    await writeAtomic(path, `${JSON.stringify(theirs)}\n`);
+
+    // The editor still holds what it read before that, and saves it.
+    const late = await putLedger(s, { ...base, selectedMonth: "2026-09" }, staleEtag);
+    assert.equal(late.status, 412, "a save against a version that has moved on is refused");
+
+    const onDisk = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(onDisk.rules.length, 1, "the rule written underneath survives");
+    assert.equal(onDisk.rules[0].pattern, "co-op");
+    assert.equal(onDisk.selectedMonth, "2026-08", "and the stale save landed nowhere");
+  } finally {
+    await s.close();
+  }
+});
+
+test("a refused save hands back what it lost to, so a client can merge in one trip", async () => {
+  const { home, statements } = tempTree();
+  const s = await attached(home, statements);
+  try {
+    const base = { version: 1, selectedMonth: "2026-08", transactions: [], rules: [], setAsides: [] };
+    const stale = (await (await putLedger(s, base)).json()).etag;
+
+    const theirs = { ...base, transactions: [{ id: "t1", date: "2026-08-02", amount: -4.5 }] };
+    await writeAtomic(join(statements, "omakei-ledger.json"), `${JSON.stringify(theirs)}\n`);
+
+    const refused = await putLedger(s, base, stale);
+    assert.equal(refused.status, 412);
+    const body = await refused.json();
+    assert.equal(body.ledger.transactions[0].id, "t1", "the current ledger comes back with the refusal");
+    assert.notEqual(body.etag, stale);
+
+    // Writing against the etag it just handed back succeeds.
+    const merged = await putLedger(s, { ...theirs, selectedMonth: "2026-09" }, body.etag);
+    assert.equal(merged.status, 200);
+  } finally {
+    await s.close();
+  }
+});
+
+test("a save with no If-Match at all is refused", async () => {
+  const { home, statements } = tempTree();
+  const s = await attached(home, statements);
+  try {
+    const res = await s.call("/ledger", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 1, transactions: [], rules: [], selectedMonth: "2026-08" }),
+    });
+    assert.equal(res.status, 428, "a blind write is the bug; there is no opting out of the check");
+    assert.equal(existsSync(join(statements, "omakei-ledger.json")), false);
+  } finally {
+    await s.close();
+  }
+});
+
+test('the first ledger is written against the etag of no ledger, ""', async () => {
+  const { home, statements } = tempTree();
+  const s = await attached(home, statements);
+  try {
+    const state = await (await s.call("/state")).json();
+    assert.equal(state.ledgerEtag, "", "nothing on disk yet");
+
+    const created = await putLedger(s, { version: 1, transactions: [], rules: [], selectedMonth: "2026-08" }, "");
+    assert.equal(created.status, 200);
+
+    // A second writer that also thinks the folder is empty must not win.
+    const alsoFirst = await putLedger(s, { version: 1, transactions: [], rules: [], selectedMonth: "2026-09" }, "");
+    assert.equal(alsoFirst.status, 412);
+  } finally {
+    await s.close();
+  }
+});
+
+test("two saves racing on the same version cannot both land", async () => {
+  const { home, statements } = tempTree();
+  const s = await attached(home, statements);
+  try {
+    const base = { version: 1, selectedMonth: "2026-08", transactions: [], rules: [], setAsides: [] };
+    const etag = (await (await putLedger(s, base)).json()).etag;
+
+    // Both read the same version and save without waiting for each other, which
+    // is two editor tabs. The check and the write are separate awaits, so this
+    // is only safe because writes are serialized.
+    const [a, b] = await Promise.all([
+      putLedger(s, { ...base, selectedMonth: "2026-09" }, etag),
+      putLedger(s, { ...base, selectedMonth: "2026-10" }, etag),
+    ]);
+
+    const codes = [a.status, b.status].sort();
+    assert.deepEqual(codes, [200, 412], "exactly one wins");
+  } finally {
+    await s.close();
+  }
 });

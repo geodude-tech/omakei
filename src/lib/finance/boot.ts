@@ -6,7 +6,7 @@
  * that, because it must never delay what is already on screen.
  */
 import { setLedgerWritable } from "./ledger-file.ts";
-import { readState, writeLedger, type AttachedFolder } from "./server.ts";
+import { readState, setLedgerEtag, writeLedger, type AttachedFolder } from "./server.ts";
 import { useLedgerStore } from "./store.ts";
 import { syncAttachedFolder } from "./sync.ts";
 import { readOpeningMonth } from "./opening-month.ts";
@@ -19,6 +19,10 @@ export type BootResult = {
 
 export async function bootLedger(): Promise<BootResult> {
   const state = await readState();
+
+  // Every save is checked against the version it was derived from, so the very
+  // first one has to know what that was.
+  setLedgerEtag(state.ledgerEtag);
 
   if (state.folder) setLedgerWritable(true, writeLedger);
 

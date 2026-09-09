@@ -25,6 +25,9 @@ which reads `state.json` to locate the ledger.
   (or inlined into the page, with the fetch as fallback).
 - A save writes atomically into the attached folder and bumps the file the widget
   watches, so the bar updates without being asked.
+- A save derived from a version of the ledger that has since changed is refused
+  rather than applied, whoever changed it. Nothing that reached the file is lost
+  to a writer that never saw it.
 - Development and an installed plugin run byte-identical disk code — anything only
   one of them can do is a bug.
 - Nothing on the network, and nothing else in the browser, can reach the ledger:
@@ -88,13 +91,45 @@ anything that reaches the port.
 
 | Method + route | Does |
 |---|---|
-| `GET /state` | `{ folder, ledger, ledgerPath, home }` — one round trip to paint |
+| `GET /state` | `{ folder, ledger, ledgerPath, ledgerEtag, home }` — one round trip to paint |
 | `POST /folder` `{path}` | Attach a folder (must exist). Persists `state.json`, bumps revision |
 | `DELETE /folder` | Detach. Persists empty `state.json`, bumps revision |
 | `GET /browse?path=` | Directory listing for the editor's folder picker (returns real paths), plus the statement count at and just below each row, the count two levels below `path`, `home`, and the `places` worth one click (home dirs and mounted volumes). Symlinked folders are followed — the picker has no path box, so a hidden folder is an unreachable one. `403` for a folder that cannot be read |
 | `GET /statements` | Every statement file under the folder, recursively, codepoint-sorted |
 | `GET /statements/file?path=` | One statement's text, `safeJoin`-checked, extension-checked, capped at 32 MB |
-| `PUT /ledger` | Validate `isLedgerPayload`, write atomically, bump revision |
+| `PUT /ledger` | Requires `If-Match`. Validate `isLedgerPayload`, check the version, write atomically, bump revision. `428` without `If-Match`, `412` (carrying the current ledger and etag) against a version that has moved on |
+
+### The ledger has more than one writer
+
+The file has two writers that do not know about each other: the editor, through
+`PUT /ledger`, and `omakei-categorize.mjs`, straight to disk. The editor holds
+the whole ledger in memory for as long as its tab is open, so its next save used
+to reinstate everything the file had gained since — a rule added minutes ago,
+silently gone. Nothing about that looked like a race, and nothing reported it.
+
+So a save says which version it was derived from. `GET /state` returns
+`ledgerEtag`, the SHA-256 of the ledger file's bytes; `PUT /ledger` requires it
+back as `If-Match` and refuses the write if the file no longer hashes to it. A
+hash rather than an mtime or a counter: two writes in the same millisecond are
+indistinguishable by clock, and no single process is in a position to keep a
+counter honest.
+
+- **`428`** — no `If-Match` at all. A blind write is the bug; there is no opting
+  out of the check.
+- **`412`** — the version moved on. The response carries the current ledger and
+  its etag, so a client merges and retries in one round trip instead of two.
+- **`""`** — the etag of no ledger yet, and a real value to write against: "I
+  read no ledger and expect there still to be none." It is what makes two
+  clients both creating the first ledger resolve rather than collide.
+
+Writes are serialized inside the handler. Reading the etag and writing the file
+are two awaits, and without the queue a second request passes the check in the
+gap the first one left — which is precisely what the check exists to stop. Two
+editor tabs are enough to reach it.
+
+`omakei-categorize.mjs` re-reads and compares immediately before it writes, and
+retries the whole operation up to three times. That narrows its own window; it
+does not close it, because nothing locks the file. See Open Questions.
 
 ## Code Style
 
@@ -233,6 +268,18 @@ Verified against the current suite (2026-08-28).
    `state.json` untouched.
 
 ## Open Questions
+
+0. **The CLI's own write window is narrowed, not closed.** `PUT /ledger` is safe
+   because the server checks and writes under one queue. `omakei-categorize.mjs`
+   is a separate process writing the same file, so its check-then-write has a
+   real gap: if the server writes inside it, the CLI still wins and the editor's
+   change is lost. The window is now microseconds rather than however long
+   someone spent reading `--list` output, and the retry makes losing it
+   recoverable, but it is not zero. Closing it needs a lock file both sides
+   honour — `O_CREAT | O_EXCL` with staleness handling — which is a protocol,
+   not a patch, and is not worth it until something actually loses a write.
+   **Untested**, for the same reason the window is small: there is no
+   deterministic way to land a write inside it without a seam built for the test.
 
 1. **`GET /browse` discloses the directory tree to any same-origin page.** It is
    loopback-only and same-origin-only, but a compromised localhost page could
