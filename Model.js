@@ -367,3 +367,56 @@ function openEditorCommand(base, summary, pluginDir) {
   if (!url || !dir) return ""
   return shellQuote(dir + "/scripts/omakei-open") + " " + shellQuote(url)
 }
+
+/** Days in "YYYY-MM". Day 0 of the next month is the last day of this one. */
+function daysInMonth(key) {
+  var parts = String(key || "").split("-")
+  var year = parseInt(parts[0], 10)
+  var month = parseInt(parts[1], 10)
+  if (!isFinite(year) || !isFinite(month)) return 30
+  return new Date(year, month, 0).getDate()
+}
+
+/**
+ * Spend per day for one month, plus the running total.
+ *
+ * The sparkline draws `cumulative`, not `spend`: a month's daily amounts are
+ * spiky enough that the line reads as noise, while the running total reads as
+ * a pace -- how fast this month is being spent, and whether it flattened.
+ * Both are returned so a future view can draw either without a second pass.
+ *
+ * Days are always 1..daysInMonth, including days with nothing, so the x axis
+ * is the month rather than the days that happened to have activity.
+ */
+function dailySpend(transactions, month) {
+  var key = month || currentMonth()
+  var count = daysInMonth(key)
+  var rows = Array.isArray(transactions) ? transactions : []
+  var perDay = []
+  var i
+  for (i = 0; i < count; i++) perDay.push(0)
+
+  for (i = 0; i < rows.length; i++) {
+    var tx = rows[i]
+    if (!tx || monthOf(tx) !== key || !isSpend(tx)) continue
+    var day = parseInt(String(tx.date).slice(8, 10), 10)
+    if (!isFinite(day) || day < 1 || day > count) continue
+    perDay[day - 1] += Math.abs(tx.amount)
+  }
+
+  var days = []
+  var running = 0
+  var maxDaily = 0
+  for (i = 0; i < count; i++) {
+    running += perDay[i]
+    if (perDay[i] > maxDaily) maxDaily = perDay[i]
+    days.push({ day: i + 1, spend: perDay[i], cumulative: running })
+  }
+
+  return {
+    days: days,
+    daysInMonth: count,
+    maxDaily: Math.round(maxDaily * 100) / 100,
+    total: Math.round(running * 100) / 100
+  }
+}

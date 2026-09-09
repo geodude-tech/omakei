@@ -214,7 +214,9 @@ someone glancing at the bar?
 - `model.test.mjs` — `openingMonth` (all four fallbacks), `summarize`,
   `latestMonth`, `editorUrl`/`editorQuery`, `openEditorCommand` (trailing slash,
   no plugin dir), `parseReaderOutput` (half-written pipe, wrong version),
-  `revisionFilePath`.
+  `revisionFilePath`, `daysInMonth` (leap February, unparseable month),
+  `dailySpend` (every day present, income and transfers and other months
+  excluded, empty ledger safe).
 - `omakei-read-ledger.test.mjs` — the reader resolves the path from the state
   file or the override, always exits 0, always prints valid JSON.
 - `check-plugin.mjs` — `omarchy-plugin-validate` on the shell files (skipped when
@@ -283,6 +285,15 @@ the editor stops holding the ledger. Nothing else in this section blocks anythin
 3. **The `appUrl` setting defaults to `http://127.0.0.1:8080/` in two places**
    (`manifest.json` and `Panel.qml`). If the server's default port ever changes,
    both move. Worth a single source.
-4. **Middle-click to reload is undiscoverable.** It is in the README but there is
+4. **`Model.dailySpend` is a second implementation of
+   `src/lib/finance/summaries.ts`'s `dailySpend`.** `Model.js` is ES5 loaded by
+   the QML engine and cannot import TypeScript, so the widget cannot share the
+   original — the same reason `Model.summarize` already restates `monthSummary`
+   and `categoryTotals`. It is precedent, not an accident, but it is still two
+   copies of one piece of arithmetic that can drift: the QML one adds
+   `cumulative` and takes `(transactions, month)` to match `Model.summarize`,
+   while the TypeScript one takes `(month, rows)`. Both are tested
+   independently. If a third copy ever appears, generate them instead.
+5. **Middle-click to reload is undiscoverable.** It is in the README but there is
    no affordance. Given the revision-file watch, a manual reload is rarely
    needed — consider whether it earns its keep.
