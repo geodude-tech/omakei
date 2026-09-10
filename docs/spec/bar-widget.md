@@ -48,16 +48,30 @@ under its own ESLint block. The ledger read is a Node subprocess
 Test:            npm test               # scripts/model.test.mjs, scripts/omakei-read-ledger.test.mjs
 Lint:            npm run lint           # Model.js under its ES5 block
 Plugin check:    npm test               # scripts/check-plugin.mjs runs omarchy-plugin-validate
-QML check:       npm test               # scripts/check-qml.mjs runs the QML offscreen
+QML check:       npm test               # scripts/check-qml.mjs runs the QML offscreen,
+                                        # then the panel for real if there is a display
 ```
 
 `Model.js` is factored so the logic is testable in Node (`model.test.mjs` loads
 it with `new Function`), and the `.qml` files are kept thin. The QML that is
-left runs under `scripts/check-qml.mjs`: quickshell renders it offscreen, with
-no compositor and no window on anyone's screen, against a throwaway ledger. It
-skips where quickshell or the omarchy shell is not installed. What it cannot
-reach is the bar itself — the pill, the popup's placement, and no-hang-at-login
-are still verified by hand.
+left runs under `scripts/check-qml.mjs` in two tiers, both against a throwaway
+ledger, and both skipping rather than failing where what they need is absent.
+
+**Offscreen** (`qml-harness/scene.qml`): quickshell renders the "Needs a
+category" section with no compositor and no window on anyone's screen. Skips
+without quickshell or the omarchy shell.
+
+**Against a real compositor** (`qml-harness/panel-scene.qml`): `Panel.qml`
+cannot load offscreen at all — its `KeyboardPanel` is a `PanelWindow`, and with
+no backend it fails before a single binding runs — so this tier creates the
+panel for real and reads its properties back. That covers the bindings, and the
+properties the bar widget reads off the panel by name, where a rename is a
+silent runtime error rather than a load failure. It **never calls `open()`**:
+creating the panel maps no surface and takes no keyboard grab, which is what
+makes it safe to run on a working desktop. Skips without `WAYLAND_DISPLAY`.
+
+What neither tier reaches is the bar itself — the pill, the popup's placement,
+and no-hang-at-login are still verified by hand.
 
 ## Project Structure
 

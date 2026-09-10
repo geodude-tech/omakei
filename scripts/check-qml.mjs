@@ -15,7 +15,15 @@
  * at a throwaway ledger, so the writes the harness makes are real writes by the
  * real CLI against a file that is deleted at the end.
  *
- * Skips, rather than fails, where quickshell or the omarchy shell is absent.
+ * Then a second scene, `qml-harness/panel-scene.qml`, if and only if there is a
+ * compositor to talk to. Offscreen cannot load `Panel.qml` at all -- its
+ * `KeyboardPanel` is a `PanelWindow` and there is no backend -- so the panel's
+ * bindings, and the properties the bar widget reads back off it by name, are
+ * otherwise never evaluated anywhere. That scene creates the panel and never
+ * shows it: creating maps no surface and takes no keyboard grab.
+ *
+ * Skips, rather than fails, where quickshell, the omarchy shell, or (for the
+ * second scene only) a Wayland display is absent.
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -29,6 +37,18 @@ const SHELL = "/usr/share/omarchy/shell";
 const TIMEOUT_MS = 60_000;
 /** quickshell colours its log lines; the escape has to be built, not typed. */
 const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+
+/**
+ * quickshell colours and prefixes its log lines; a harness's own lines are the
+ * only ones worth reading.
+ */
+function harnessLines(run) {
+  return `${run.stdout ?? ""}${run.stderr ?? ""}`
+    .split("\n")
+    .map((l) => l.replace(ANSI, ""))
+    .filter((l) => l.includes("qml:"))
+    .map((l) => l.replace(/^.*?\bqml:\s?/, ""));
+}
 
 function skip(why) {
   console.log(`skip qml check: ${why}`);
@@ -45,6 +65,7 @@ try {
 }
 
 const stage = mkdtempSync(join(tmpdir(), "omakei-qml-"));
+let panelStage = "";
 try {
   // The config root: the harness scene plus everything it imports.
   for (const dir of ["Commons", "Ui", "services"]) symlinkSync(join(SHELL, dir), join(stage, dir));
@@ -77,14 +98,7 @@ try {
     },
   });
 
-  // quickshell colours and prefixes its log lines; the harness's own lines are
-  // the only ones worth reading.
-  const lines = `${run.stdout ?? ""}${run.stderr ?? ""}`
-    .split("\n")
-    .map((l) => l.replace(ANSI, ""))
-    .filter((l) => l.includes("qml:"))
-    .map((l) => l.replace(/^.*?\bqml:\s?/, ""));
-
+  const lines = harnessLines(run);
   for (const line of lines) console.log(line.trimEnd());
 
   const failed = lines.filter((l) => l.trim().startsWith("FAIL"));
@@ -103,9 +117,100 @@ try {
     console.error(`qml check: the popup wrote ${JSON.stringify(rules)}, expected ${JSON.stringify(expected)}`);
     process.exit(1);
   }
-  console.log(`qml check: ${lines.filter((l) => l.trim().startsWith("PASS")).length} checks passed`);
+  const passed = lines.filter((l) => l.trim().startsWith("PASS")).length;
+  console.log(`qml check: ${passed + runPanelScene()} checks passed`);
 } finally {
   rmSync(stage, { recursive: true, force: true });
+  if (panelStage) rmSync(panelStage, { recursive: true, force: true });
+}
+
+/**
+ * The second scene: `Panel.qml` created for real, and never shown.
+ *
+ * Needs a compositor, so it skips without one rather than failing — CI has no
+ * display, and neither does a headless checkout. Returns how many checks
+ * passed, and exits the process itself on failure.
+ */
+function runPanelScene() {
+  if (!process.env.WAYLAND_DISPLAY) {
+    console.log("qml check: no WAYLAND_DISPLAY, so the panel scene is skipped");
+    return 0;
+  }
+
+  panelStage = mkdtempSync(join(tmpdir(), "omakei-panel-"));
+  for (const dir of ["Commons", "Ui", "services"]) {
+    symlinkSync(join(SHELL, dir), join(panelStage, dir));
+  }
+  const home = join(panelStage, "home");
+  const statements = join(home, "Statements");
+  const stateDir = join(home, ".local", "state", "omakei");
+  mkdirSync(statements, { recursive: true });
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(join(stateDir, "state.json"), renderStateFile(statements));
+  writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify(rollingLedger()));
+  writeFileSync(
+    join(panelStage, "shell.qml"),
+    readFileSync(join(ROOT, "qml-harness", "panel-scene.qml"), "utf8").replace("@REPO@", ROOT),
+  );
+
+  const run = spawnSync("quickshell", ["-p", join(panelStage, "shell.qml")], {
+    encoding: "utf8",
+    timeout: TIMEOUT_MS,
+    cwd: panelStage,
+    env: {
+      ...process.env,
+      HOME: home,
+      XDG_STATE_HOME: join(home, ".local", "state"),
+      // Explicit, so a QT_QPA_PLATFORM already in the environment cannot send
+      // this at the offscreen backend the panel is unable to load on.
+      QT_QPA_PLATFORM: "wayland",
+    },
+  });
+
+  const lines = harnessLines(run);
+  for (const line of lines) console.log(line.trimEnd());
+  if (!lines.some((l) => l.includes("PANEL HARNESS DONE"))) {
+    console.error(`qml check: the panel scene did not finish (exit ${run.status ?? "timeout"})`);
+    process.exit(1);
+  }
+  if (lines.some((l) => l.trim().startsWith("FAIL"))) process.exit(1);
+  return lines.filter((l) => l.trim().startsWith("PASS")).length;
+}
+
+/**
+ * A ledger with a month of history behind it, so the rolling window has
+ * something to reach back into. The numbers are round on purpose: 4000 in
+ * before the window opens and 8000 inside it, 4500 out, 500 set aside.
+ */
+function rollingLedger() {
+  let n = 0;
+  const tx = (date, description, amount, categoryId) => ({
+    id: `r${(n += 1)}`,
+    date,
+    description,
+    amount,
+    accountName: "checking",
+    accountKind: "checking",
+    sourceFile: "f.csv",
+    fingerprint: `fp:r${n}`,
+    categoryId,
+    importedAt: 0,
+  });
+  return {
+    version: 1,
+    selectedMonth: "2026-09",
+    rules: [],
+    setAsides: [{ id: "tax", name: "Filing taxes", amount: 500 }],
+    transactions: [
+      // Before the window opens on Aug 10, so it must not be counted.
+      tx("2026-08-05", "ACME WORKS PAYROLL", 4000, "income"),
+      tx("2026-08-20", "ACME WORKS PAYROLL", 4000, "income"),
+      tx("2026-08-28", "ACME WORKS PAYROLL", 4000, "income"),
+      tx("2026-09-01", "NORTHGATE MORTGAGE", -2600, "housing"),
+      tx("2026-09-02", "BRIGHT MEADOW CHILDCARE", -1800, "childcare"),
+      tx("2026-09-08", "ZORP GROCERS", -100, "groceries"),
+    ],
+  };
 }
 
 function ledger() {
