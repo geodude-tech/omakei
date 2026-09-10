@@ -62,7 +62,8 @@ import { attachFolder, detachFolder, writeLedger, type AttachedFolder } from "@/
 import { importAndSave, syncAttachedFolder, toastImport, toastSync } from "@/lib/finance/sync";
 import { parseDroppedFiles } from "@/lib/finance/statements";
 import { clearOpeningMonthFromUrl } from "@/lib/finance/opening-month";
-import { unknownMerchants, useLedgerStore } from "@/lib/finance/store";
+import { useLedgerStore } from "@/lib/finance/store";
+import { uncategorizedMerchants } from "@/lib/finance/uncategorized.ts";
 import type { ImportFileResult, Transaction } from "@/lib/finance/types";
 import { FolderPicker } from "@/components/omakei/folder-picker";
 import { StatementDropzone } from "@/components/omakei/statement-dropzone";
@@ -155,7 +156,7 @@ export function Dashboard() {
   const stats = useMemo(() => monthSummary(monthTx, setAsides), [monthTx, setAsides]);
   const cats = useMemo(() => categoryTotals(monthTx), [monthTx]);
   const unknowns = useMemo(
-    () => (detailsReady ? unknownMerchants(transactions) : []),
+    () => (detailsReady ? uncategorizedMerchants(transactions) : []),
     [detailsReady, transactions],
   );
 

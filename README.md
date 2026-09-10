@@ -45,6 +45,7 @@ Known merchants are categorized automatically. A transaction with an unknown cat
 ## On the bar
 
 - Left click: spend, income, reserved, categories, and recent activity — this month, or the most recent month with activity if this month is still empty
+- Under **Needs a category**: the merchants Omakei could not place, biggest first. Pick a category and it is remembered for that merchant everywhere, without opening the editor
 - Right click: open Omakei
 - Middle click: reload the ledger
 

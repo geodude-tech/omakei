@@ -36,6 +36,22 @@ function envFor(home) {
 
 const LEDGER = { version: 1, transactions: [{ id: "a", date: "2026-08-02", amount: -4.5 }], rules: [] };
 
+const NOTHING_UNCATEGORIZED = { merchants: [], total: 0 };
+
+/** A row the way the ledger holds one, with no category on it. */
+function unknownTx(id, description, amount) {
+  return {
+    id,
+    date: "2026-08-10",
+    description,
+    amount,
+    accountName: "checking",
+    accountKind: "checking",
+    fingerprint: `fp:${id}`,
+    categoryId: null,
+  };
+}
+
 test("the ledger the state file points at is returned", async () => {
   const { home, statements } = attachedHome();
   writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify(LEDGER));
@@ -47,7 +63,11 @@ test("the ledger the state file points at is returned", async () => {
 test("nothing attached reads as null rather than an error", async () => {
   const root = mkdtempSync(join(tmpdir(), "omakei-widget-"));
   temps.push(root);
-  assert.deepEqual(await readLedgerForWidget("", envFor(root)), { path: "", ledger: null });
+  assert.deepEqual(await readLedgerForWidget("", envFor(root)), {
+    path: "",
+    ledger: null,
+    uncategorized: NOTHING_UNCATEGORIZED,
+  });
 });
 
 test("a symlinked ledger is refused", async () => {
@@ -125,5 +145,41 @@ test("the CLI prints JSON and exits cleanly with nothing attached", () => {
     encoding: "utf8",
     env: { ...process.env, HOME: root, XDG_STATE_HOME: join(root, "state") },
   });
-  assert.deepEqual(JSON.parse(out), { path: "", ledger: null }, "the widget must always receive parseable JSON");
+  assert.deepEqual(
+    JSON.parse(out),
+    { path: "", ledger: null, uncategorized: NOTHING_UNCATEGORIZED },
+    "the widget must always receive parseable JSON",
+  );
+});
+
+test("the merchants that need a category come back, biggest first and capped", async () => {
+  const { home, statements } = attachedHome();
+  const transactions = [
+    unknownTx("a", "ZORP WIDGETS 5567", -12.5),
+    unknownTx("b", "ZORP WIDGETS 1180", -30),
+    unknownTx("c", "SQ *PORCH SUPPLY SEATTLE WA", -80),
+    { ...unknownTx("d", "STARBUCKS STORE 09876", -6.25), categoryId: "coffee" },
+  ];
+  // Enough distinct merchants to push past the cap the popup is handed.
+  // Names, not numbers: the merchant key drops store numbers, so `QUUX 1` and
+  // `QUUX 2` would be one merchant.
+  const others = ["ALFA", "BRAVO", "CHARLIE", "DELTA", "ECHO", "FOXTROT", "GOLF", "HOTEL"];
+  others.forEach((name, i) => transactions.push(unknownTx(`x${i}`, `QUUX ${name} SUPPLY`, -1)));
+  writeFileSync(
+    join(statements, "omakei-ledger.json"),
+    JSON.stringify({ version: 1, rules: [], transactions }),
+  );
+
+  const { uncategorized } = await readLedgerForWidget("", envFor(home));
+  assert.equal(uncategorized.total, 10, "ZORP, PORCH SUPPLY, and eight QUUX; the coffee row is out");
+  assert.equal(uncategorized.merchants.length, 6, "the popup is a glance, not the rules table");
+  assert.deepEqual(uncategorized.merchants[0], { merchant: "PORCH SUPPLY", count: 1, total: -80 });
+  assert.deepEqual(uncategorized.merchants[1], { merchant: "ZORP WIDGETS", count: 2, total: -42.5 });
+});
+
+test("a ledger that will not parse still carries an empty merchant list", async () => {
+  const { home, statements } = attachedHome();
+  writeFileSync(join(statements, "omakei-ledger.json"), "not json at all");
+  const out = await readLedgerForWidget("", envFor(home));
+  assert.deepEqual(out.uncategorized, NOTHING_UNCATEGORIZED);
 });

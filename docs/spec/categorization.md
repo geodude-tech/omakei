@@ -95,18 +95,19 @@ src/lib/finance/categories.ts   → CATEGORIES (the fixed 17), DEFAULT_PATTERNS,
 src/lib/finance/fingerprint.ts  → ruleMatches(), identifierLength(), extractMerchant() — the matcher
 src/lib/finance/ledger.ts       → assignCategory(), bestMatchingRule(), upsertRule(), makeUserRule(), refreshCategories()
 src/lib/finance/transfers.ts    → structural transfer / mortgage categories + opposite-leg pairing (see statement-import.md)
-src/lib/finance/store.ts        → categorizeMerchant(), categorizeOne(), unknownMerchants()
+src/lib/finance/store.ts        → categorizeMerchant(), categorizeOne()
+src/lib/finance/uncategorized.ts → uncategorizedMerchants(): the merchants with no category, for the editor, the CLI, and the bar
 src/components/omakei/needs-category.tsx   → the uncategorized-merchant list + picker
 src/components/omakei/category-select.tsx  → the grouped category dropdown
 src/components/omakei/rules-sheet.tsx      → view / delete user rules
 src/components/omakei/transaction-row.tsx  → per-row category dropdown
-scripts/omakei-categorize.mjs   → terminal CLI: add / --remove / --list / --dry-run a user rule, re-derive, bump the bar
+scripts/omakei-categorize.mjs   → terminal CLI: add / --remove / --list [--json] / --dry-run a user rule, re-derive, bump the bar
 scripts/ledger-api.mjs          → exports writeAtomic() and bumpRevisionAt(stateDir), used by the CLI to write like the server does
 ```
 
 Tests: `src/lib/finance/ledger.test.ts`, `src/lib/finance/store.test.ts`,
-`scripts/omakei-categorize.test.mjs`, plus the `extractMerchant` corpus in
-`fingerprint.test.ts`. Docs: `docs/ledger.md` "Writing back" section,
+`src/lib/finance/uncategorized.test.ts`, `scripts/omakei-categorize.test.mjs`,
+plus the `extractMerchant` corpus in `fingerprint.test.ts`. Docs: `docs/ledger.md` "Writing back" section,
 `docs/spec/README.md` row.
 
 ## Code Style

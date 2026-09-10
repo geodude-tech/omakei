@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const FILES = ["manifest.json", "BarWidget.qml", "Panel.qml", "Model.js"];
+const FILES = ["manifest.json", "BarWidget.qml", "Panel.qml", "NeedsCategory.qml", "Model.js"];
 
 const validate = spawnSync("omarchy-plugin-validate", ["--help"], {
   encoding: "utf8",

@@ -1,7 +1,8 @@
 # Spec: Bar Widget
 
-_Status: documents existing behavior as of 2026-08-28. "Where a capability belongs"
-and the write half of **Boundaries** are forward — agreed 2026-09-08, not yet built.
+_Status: documents existing behavior as of 2026-09-09. "Where a capability belongs"
+was forward when it was agreed; its first row — categorizing an unknown merchant
+from the popup — is built. The set-aside row still is not, and waits on a CLI.
 Traces to `docs/intent/omakei.md`._
 
 ## Objective
@@ -44,11 +45,16 @@ under its own ESLint block. The ledger read is a Node subprocess
 Test:            npm test               # scripts/model.test.mjs, scripts/omakei-read-ledger.test.mjs
 Lint:            npm run lint           # Model.js under its ES5 block
 Plugin check:    npm test               # scripts/check-plugin.mjs runs omarchy-plugin-validate
+QML check:       npm test               # scripts/check-qml.mjs runs the QML offscreen
 ```
 
-There is no automated QML test. `Model.js` is factored so the logic is testable
-in Node (`model.test.mjs` loads it with `new Function`), and the `.qml` files are
-kept thin.
+`Model.js` is factored so the logic is testable in Node (`model.test.mjs` loads
+it with `new Function`), and the `.qml` files are kept thin. The QML that is
+left runs under `scripts/check-qml.mjs`: quickshell renders it offscreen, with
+no compositor and no window on anyone's screen, against a throwaway ledger. It
+skips where quickshell or the omarchy shell is not installed. What it cannot
+reach is the bar itself — the pill, the popup's placement, and no-hang-at-login
+are still verified by hand.
 
 ## Project Structure
 
@@ -56,14 +62,17 @@ kept thin.
 manifest.json                    → plugin manifest: kind "bar-widget", entry BarWidget.qml, settings schema
 BarWidget.qml                    → the pill: label, tooltip, click routing, lazy Panel loader
 Panel.qml                        → the popup: month nav, the reader Process, the revision FileView, keys
+NeedsCategory.qml                → the "Needs a category" section: the rows, the dropdowns, and the one write
 Model.js                         → all logic: summarize(), openingMonth(), formatMoney(), editorUrl(), …
-scripts/omakei-read-ledger.mjs   → prints {"path","ledger"} as JSON; the only disk read the widget makes
+scripts/omakei-read-ledger.mjs   → prints {"path","ledger","uncategorized"} as JSON; the only disk read the widget makes
+scripts/omakei-categorize.mjs    → the only write the widget can make, run as `<merchant> <category>`
 scripts/omakei-open              → starts the editor server if nothing is serving, then opens the URL
 ```
 
 Shell-loaded files at the repo root ship to installers via `omarchy plugin add`
 (which clones the git tree). `check-plugin.mjs` validates `manifest.json`,
-`BarWidget.qml`, `Panel.qml`, `Model.js` on a clean staging dir.
+`BarWidget.qml`, `Panel.qml`, `NeedsCategory.qml`, `Model.js` on a clean staging
+dir — a new shell-loaded file at the root belongs in that list.
 
 ## Code Style
 
@@ -127,10 +136,61 @@ with `‹`/`›` or `[`/`]` sets it `false` so a background sync cannot yank the
 `t` sets it back to `true` and jumps to the current month. `SystemClock` at
 minute precision rolls `viewMonth` forward at midnight only when still following.
 
+### Categorizing a merchant from the popup
+
+Under the stat line, "Needs a category" lists the merchants with no category
+yet, biggest first, each with a dropdown of the fixed 17. Picking one runs
+`omakei-categorize.mjs <merchant> <category>` — one value, one command — which
+writes the rule, re-derives every transaction, and bumps the revision file, so
+the row leaves on the read that follows.
+
+Four things keep it inside the ceiling this spec sets:
+
+- **The list is the reader's, not `Model.js`'s.** The merchant key comes from
+  `extractMerchant`, and `src/lib/finance/uncategorized.ts` is the one
+  implementation — shared with `--list` and with the editor's own list, so all
+  three name the same merchant. A QML restatement of that heuristic would write
+  rules that match nothing.
+- **The list is whole-ledger and capped at six.** A rule is merchant-wide, so
+  scoping it to the month on screen would hide the merchant the user is about to
+  fix. The tail is `--list` in a terminal; the popup says how many it is not
+  showing.
+- **Writes are queued, one at a time, and a second pick for the same merchant
+  is queued rather than dropped.** The CLI refuses a write against a ledger that
+  moved under it, so two racing invocations would make one retry for nothing;
+  the rule is keyed by pattern, so the last write wins, which is the category
+  the dropdown is showing.
+- **A refused write says so.** A non-zero exit leaves the row reading "could not
+  save" instead of quietly reverting. A write that silently does nothing is the
+  failure this ledger has already been bitten by once (`ledger-server.md`).
+- **An open dropdown owns the keyboard.** `PanelKeyCatcher.blocked` follows
+  `Dropdown.popupOpen`, or `j`/`k` would also step the month and Escape would
+  close the whole popup.
+
+### A plugin directory is not a QML import path
+
+The shell loads a plugin by absolute path from `~/.config/omarchy/plugins/<id>/`,
+which is outside its own config root, and quickshell serves it under a `qs:`
+URL. There, **a sibling `.qml` file is not implicitly a type.** `NeedsCategory { }`
+in `Panel.qml` fails to compile with "NeedsCategory is not a type", and a bare
+`import "."` does not fix it. A namespaced directory import does:
+
+```qml
+import "." as Local
+...
+Local.NeedsCategory { }
+```
+
+This is invisible to `qmllint` and to `omarchy-plugin-validate`, and it breaks
+the whole popup rather than one section. `check-qml.mjs` guards it. **A sixth
+shell-loaded file needs the same namespace and the same entry in
+`check-plugin.mjs`.**
+
 ### Popup interactions
 
 | Input | Action |
 |---|---|
+| A category in "Needs a category" | Write that merchant's rule via `omakei-categorize.mjs` |
 | Left-click pill | Toggle the popup |
 | Right-click pill | Open the editor (`openOmakei`) |
 | Middle-click pill | `refresh()` — re-read the ledger |
@@ -201,7 +261,7 @@ someone glancing at the bar?
 
 | Capability | Home | Why |
 |---|---|---|
-| Categorize an unknown merchant | **Widget** | One value, one command; `omakei-categorize.mjs` already does it |
+| Categorize an unknown merchant | **Widget** — built | One value, one command; `omakei-categorize.mjs` already does it |
 | Add a reserved / set-aside | **Widget**, one at a time | Two fields — the passphrase pattern. Needs an `omakei-set-aside` CLI first; there is none |
 | Attach a folder | Editor | Browsing a filesystem is a session |
 | Import statements | Editor | Many files, dedupe, warnings to review |
@@ -217,8 +277,15 @@ someone glancing at the bar?
   `revisionFilePath`, `daysInMonth` (leap February, unparseable month),
   `dailySpend` (every day present, income and transfers and other months
   excluded, empty ledger safe).
+- `model.test.mjs` also pins the write half: `parseReaderOutput` carrying the
+  merchant rows, `categoryOptions` against `CATEGORIES` (the test imports the
+  real list, because `Model.js` cannot), and `categorizeCommand` returning `[]`
+  for every half-formed input rather than a command with a hole in it.
 - `omakei-read-ledger.test.mjs` — the reader resolves the path from the state
-  file or the override, always exits 0, always prints valid JSON.
+  file or the override, always exits 0, always prints valid JSON, and returns
+  the uncategorized merchants sorted and capped.
+- `omakei-categorize.test.mjs` — `--list --json` prints what the popup consumes,
+  and `--json` without `--list` is refused.
 - `check-plugin.mjs` — `omarchy-plugin-validate` on the shell files (skipped when
   the validator is not on `PATH`).
 - QML behavior (no hang at login, live refresh on save) is verified by hand.
@@ -264,6 +331,13 @@ Verified against the current suite (2026-08-28).
 4. **Met.** `parseReaderOutput("{trunca")` returns `{ path: "", ledger: null }`
    rather than throwing.
 5. **Met.** `openEditorCommand` returns `""` with no plugin directory.
+6. **Met.** (2026-09-09) The popup's "Needs a category" section is covered by
+   `model.test.mjs`, `omakei-read-ledger.test.mjs`, `omakei-categorize.test.mjs`
+   and `uncategorized.test.ts`, and the QML by `check-qml.mjs` — ten checks
+   offscreen, including a real write by the real CLI against a throwaway
+   ledger. Verified once by hand as well, on a nested headless compositor: the
+   panel loads from an absolute path, the reader fills the section, picking a
+   category writes the rule, and the row leaves on the re-read.
 
 ## Open Questions
 
@@ -298,6 +372,19 @@ write inherits; it is microseconds rather than minutes, and the CLI retries.
    `cumulative` and takes `(transactions, month)` to match `Model.summarize`,
    while the TypeScript one takes `(month, rows)`. Both are tested
    independently. If a third copy ever appears, generate them instead.
-5. **Middle-click to reload is undiscoverable.** It is in the README but there is
+5. **A category popup can be clipped by the bottom of the panel window.**
+   Measured on a nested compositor: the option list is 254px tall, and against a
+   585px panel the last two rows overflowed by 1px and 40px. A Qt `Popup` lives
+   in its window's overlay, so it is cut off rather than escaping. The harness
+   ledger is small, which puts the section near the bottom; a real month has
+   categories and activity below it. The fix would be opening upward near the
+   edge, which belongs in the shared `Dropdown`, not here.
+6. **The category dropdowns are mouse-only.** `PanelKeyCatcher` takes Tab for
+   switching panels, so nothing in the popup — the dropdowns or the "Open
+   Omakei" button — can be reached by keyboard; once a dropdown is open, keys
+   work normally. The button has always had this, so it is not a regression, but
+   the popup now has an input worth reaching. Fixing it means a cursor model
+   over the rows, which is the shape the omarchy panels use.
+7. **Middle-click to reload is undiscoverable.** It is in the README but there is
    no affordance. Given the revision-file watch, a manual reload is rarely
    needed — consider whether it earns its keep.

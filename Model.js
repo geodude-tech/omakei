@@ -226,17 +226,86 @@ function parseLedger(raw) {
  * half-written pipe still has to land somewhere sane rather than throwing
  * inside a signal handler.
  */
+function emptyReaderOutput() {
+  return { path: "", ledger: null, uncategorized: { merchants: [], total: 0 } }
+}
+
 function parseReaderOutput(raw) {
   try {
     var payload = JSON.parse(String(raw || ""))
-    if (!payload || typeof payload !== "object") return { path: "", ledger: null }
+    if (!payload || typeof payload !== "object") return emptyReaderOutput()
     return {
       path: typeof payload.path === "string" ? payload.path : "",
-      ledger: normalizeLedger(payload.ledger)
+      ledger: normalizeLedger(payload.ledger),
+      uncategorized: parseUncategorized(payload.uncategorized)
     }
   } catch (e) {
-    return { path: "", ledger: null }
+    return emptyReaderOutput()
   }
+}
+
+/**
+ * The "Needs a category" rows the reader computed, defended the same way the
+ * ledger is: a half-written pipe must land somewhere sane, not throw inside a
+ * signal handler.
+ *
+ * The merchant keys come from the reader's `extractMerchant`, never from here.
+ * A second implementation of that heuristic in QML would name a merchant the
+ * CLI does not recognize, and the rule the popup wrote would match nothing.
+ */
+function parseUncategorized(data) {
+  var empty = { merchants: [], total: 0 }
+  if (!data || typeof data !== "object") return empty
+  var rows = Array.isArray(data.merchants) ? data.merchants : []
+  var merchants = []
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i]
+    if (!row || typeof row.merchant !== "string" || !row.merchant) continue
+    merchants.push({
+      merchant: row.merchant,
+      count: Number(row.count) || 0,
+      total: Number(row.total) || 0
+    })
+  }
+  var total = Number(data.total)
+  return {
+    merchants: merchants,
+    total: isFinite(total) && total > merchants.length ? Math.floor(total) : merchants.length
+  }
+}
+
+/**
+ * The categories a merchant can be assigned to, in the order the app lists
+ * them. `Dropdown` takes exactly this shape. A placeholder is prepended when
+ * one is given, because a dropdown that has never been touched has no value to
+ * show; selecting it is a no-op the caller drops.
+ */
+function categoryOptions(placeholder) {
+  var options = []
+  if (placeholder) options.push({ value: "", label: String(placeholder) })
+  for (var id in CATEGORY_NAMES) {
+    if (!Object.prototype.hasOwnProperty.call(CATEGORY_NAMES, id)) continue
+    options.push({ value: id, label: CATEGORY_NAMES[id] })
+  }
+  return options
+}
+
+/**
+ * The one write the widget can make: a rule for this merchant, in this
+ * category, through the CLI that already does it from a terminal. Returned as
+ * an argv array, so nothing here has to be quoted and no shell is involved.
+ *
+ * Anything missing or unknown returns [] rather than a command with a hole in
+ * it. The CLI validates the category too -- this is the near check, not the
+ * only one.
+ */
+function categorizeCommand(pluginDir, merchant, categoryId) {
+  var dir = String(pluginDir || "").replace(/\/$/, "")
+  var name = String(merchant || "").replace(/^\s+|\s+$/g, "")
+  var id = String(categoryId || "")
+  if (!dir || !name) return []
+  if (!Object.prototype.hasOwnProperty.call(CATEGORY_NAMES, id)) return []
+  return [dir + "/scripts/omakei-categorize.mjs", name, id]
 }
 
 function emptySummary(month) {

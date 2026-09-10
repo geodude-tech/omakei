@@ -5,6 +5,14 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
+/**
+ * The plugin's own directory, namespaced. A plugin is loaded from
+ * `~/.config/omarchy/plugins/<id>/` by absolute path, which is outside the
+ * shell's config root, and there a sibling `.qml` is NOT implicitly a type --
+ * `NeedsCategory { }` alone fails to compile with "NeedsCategory is not a
+ * type", and a bare `import "."` does not fix it either. The namespace does.
+ */
+import "." as Local
 
 Panel {
   id: root
@@ -35,6 +43,13 @@ Panel {
 
   property date today: new Date()
   property var ledger: null
+  /**
+   * The merchants with no category yet, as the reader grouped them, and how
+   * many there are in total. Whole-ledger, not this month: a rule is
+   * merchant-wide, so scoping the list to the month on screen would hide the
+   * merchant whose rule the user is about to write.
+   */
+  property var uncategorized: ({ merchants: [], total: 0 })
   property string viewMonth: Model.currentMonth()
   property var monthSummary: Model.emptySummary(viewMonth)
   /**
@@ -123,6 +138,7 @@ Panel {
       return
     }
     root.ledger = out.ledger
+    root.uncategorized = out.uncategorized
     if (root.followLedgerMonth) root.viewMonth = Model.openingMonth(root.ledger, root.today)
     root.applyLedger()
   }
@@ -235,6 +251,10 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      // While a category dropdown is open it owns the keyboard: j/k walk its
+      // options, Escape closes it. Without this the same keys would also drive
+      // the month nav underneath and Escape would shut the whole popup.
+      blocked: needsCategory.dropdownOpen
       onMoveRequested: function(dx, dy) {
         if (dx !== 0) root.moveMonth(dx)
       }
@@ -495,6 +515,28 @@ Panel {
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.body
             }
+          }
+
+          /**
+           * The only thing the widget writes, and the only interaction where
+           * the user is the required input. It owns its own queue and its own
+           * process; the panel hands it rows and re-reads when it says so.
+           */
+          Local.NeedsCategory {
+            id: needsCategory
+            width: omakeiColumn.width
+            merchants: root.uncategorized.merchants
+            total: root.uncategorized.total
+            pluginDir: root.pluginDir
+            foreground: root.contentForeground
+            dim: root.contentDim
+            urgent: root.contentUrgent
+            fontFamily: root.contentFontFamily
+            // A write lands, or is refused; either way the ledger on disk is
+            // worth re-reading. The CLI bumps the revision file too, which the
+            // watch below turns into the same refresh -- this covers the write
+            // that failed and bumped nothing, and costs one read.
+            onWrote: root.refresh()
           }
 
           Column {
