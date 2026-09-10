@@ -395,9 +395,129 @@ function summarize(transactions, month, setAsides) {
   }
 }
 
+/** "YYYY-MM-DD" for a Date, read in UTC so a local midnight cannot shift it. */
+function isoDay(date) {
+  var d = date instanceof Date ? date : new Date()
+  var m = d.getUTCMonth() + 1
+  var day = d.getUTCDate()
+  return d.getUTCFullYear() + "-" + (m < 10 ? "0" : "") + m + "-" + (day < 10 ? "0" : "") + day
+}
+
+/** Today as "YYYY-MM-DD". Accepts a Date or an already-formatted day. */
+function currentDay(date) {
+  if (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) return date
+  var d = date || new Date()
+  return d.getFullYear() + "-"
+    + (d.getMonth() + 1 < 10 ? "0" : "") + (d.getMonth() + 1) + "-"
+    + (d.getDate() < 10 ? "0" : "") + d.getDate()
+}
+
+/**
+ * The first day of the month-long window that ends on `end`, inclusive.
+ *
+ * One calendar month back rather than a flat 30 days, so every monthly bill
+ * lands in the window exactly once: Sep 9 looks back to Aug 10, and the
+ * mortgage that hit on the 1st is counted once whichever day you ask on.
+ *
+ * The day one month back is clamped to that month's length before the window
+ * opens the day after it -- Mar 30 has no Feb 30, and clamping to Feb 28 puts
+ * the start on Mar 1 rather than somewhere in February.
+ */
+function trailingStart(end) {
+  var parts = String(end || "").split("-")
+  var year = parseInt(parts[0], 10)
+  var month = parseInt(parts[1], 10)
+  var day = parseInt(parts[2], 10)
+  if (!isFinite(year) || !isFinite(month) || !isFinite(day)) return ""
+  var prevYear = month === 1 ? year - 1 : year
+  var prevMonth = month === 1 ? 12 : month - 1
+  var key = prevYear + "-" + (prevMonth < 10 ? "0" : "") + prevMonth
+  var clamped = Math.min(day, daysInMonth(key))
+  return isoDay(new Date(Date.UTC(prevYear, prevMonth - 1, clamped) + 86400000))
+}
+
+/** The oldest "YYYY-MM-DD" in the ledger, or "" when it is empty. */
+function earliestDay(transactions) {
+  var rows = Array.isArray(transactions) ? transactions : []
+  var oldest = ""
+  for (var i = 0; i < rows.length; i++) {
+    var date = String((rows[i] && rows[i].date) || "")
+    if (date.length === 10 && (oldest === "" || date < oldest)) oldest = date
+  }
+  return oldest
+}
+
+/**
+ * In minus out over the month ending today, rather than over the month so far.
+ *
+ * The calendar-month figure is honest but unreadable for the first week or two:
+ * the mortgage and child care land on the 1st and the income that covers them
+ * arrives later, so the number opens deeply negative every month and climbs
+ * back. A window that ends today always holds one of each, and reads as the
+ * standing gap between in and out instead of the day of the month.
+ *
+ * It does not remove every wobble. Biweekly pay lands two or three times in a
+ * month-long window depending on where you stand, so the number still breathes
+ * by a paycheck -- a much smaller artifact than the one it replaces.
+ *
+ * `complete` is false when the ledger does not reach back to the start of the
+ * window. A freshly synced ledger holding only this month's statement would
+ * otherwise report a month of income against a week of spending, which is a
+ * worse lie than the one being fixed; callers fall back to the month figure.
+ */
+function rollingSummary(transactions, setAsides, today) {
+  var rows = Array.isArray(transactions) ? transactions : []
+  var end = currentDay(today)
+  var start = trailingStart(end)
+  var spent = 0
+  var income = 0
+  var counted = 0
+  var reserved = parseSetAsides(setAsides)
+  var allocated = setAsideTotal(reserved)
+
+  for (var i = 0; i < rows.length; i++) {
+    var tx = rows[i]
+    var date = String((tx && tx.date) || "")
+    if (date < start || date > end) continue
+    if (isSpend(tx)) spent += Math.abs(tx.amount)
+    else if (isIncome(tx)) income += tx.amount
+    else continue
+    counted++
+  }
+
+  var oldest = earliestDay(rows)
+  return {
+    start: start,
+    end: end,
+    label: formatDay(start) + " – " + formatDay(end),
+    spent: Math.round(spent * 100) / 100,
+    income: Math.round(income * 100) / 100,
+    allocated: allocated,
+    /* The window is one calendar month long, so a monthly reserve subtracts in
+       full -- the same arithmetic `summarize` does, over a different month. */
+    net: Math.round((income - spent - allocated) * 100) / 100,
+    hasData: counted > 0,
+    complete: oldest !== "" && oldest <= start
+  }
+}
+
 function barLabel(summary) {
   if (!summary || !summary.hasData) return "Omakei"
   return formatMoney(summary.net, { sign: true, compact: true })
+}
+
+/**
+ * The bar's hover text: which window the number covers, and what went in and
+ * out over it. Takes either shape -- a month summary names its month, the
+ * rolling one names its date range.
+ */
+function barTooltip(summary) {
+  if (!summary || !summary.hasData) return "Omakei ledger"
+  var span = summary.monthLabel || summary.label || ""
+  var line = span + "  " + formatMoney(summary.spent) + " spent  ·  "
+    + formatMoney(summary.income) + " in"
+  if (summary.allocated > 0) line += "  ·  " + formatMoney(summary.allocated) + " reserved"
+  return line
 }
 
 function editorQuery(summary) {

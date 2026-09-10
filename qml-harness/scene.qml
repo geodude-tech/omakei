@@ -103,6 +103,17 @@ ShellRoot {
         err.indexOf("is not a type") < 0)
       if (err.indexOf("is not a type") >= 0) console.log("  " + err)
 
+      // The bar's own file is never instantiated here -- it needs a real bar
+      // to sit in -- but it reads properties off the panel, and a rename on
+      // either side is a silent runtime error rather than a load failure. This
+      // is the guard that the two still compile against each other.
+      var widget = Qt.createComponent(harness.repo + "/BarWidget.qml", Component.PreferSynchronous)
+      // Ready, not "no error": a component still loading has no error string
+      // either, and that would pass without having compiled anything.
+      var widgetErr = widget.status === Component.Error ? widget.errorString() : ""
+      harness.check("BarWidget.qml compiles", widget.status === Component.Ready)
+      if (widgetErr) console.log("  " + widgetErr)
+
       harness.check("a row per merchant", drops.length === 4)
       harness.check("the placeholder plus the fixed 17 categories",
         drops.length > 0 && drops[0].options.length === 18)

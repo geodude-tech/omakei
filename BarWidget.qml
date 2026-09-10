@@ -8,9 +8,14 @@ BarWidget {
   moduleName: "omakei"
 
   readonly property string currentMonth: Model.currentMonth()
-  readonly property var monthSummary: panelLoader.item ? panelLoader.item.currentSummary : Model.emptySummary(currentMonth)
-  readonly property string displayText: Model.barLabel(monthSummary)
-  readonly property bool negativeNet: !!(monthSummary && monthSummary.hasData && monthSummary.net < -0.005)
+  /**
+   * In minus out over the month ending today, falling back to this month's
+   * figure when the ledger does not reach back that far. The panel owns the
+   * choice; see `Panel.barSummary`.
+   */
+  readonly property var barSummary: panelLoader.item ? panelLoader.item.barSummary : Model.emptySummary(currentMonth)
+  readonly property string displayText: Model.barLabel(barSummary)
+  readonly property bool negativeNet: !!(barSummary && barSummary.hasData && barSummary.net < -0.005)
 
   function injectPanel() {
     var target = panelLoader.item
@@ -76,10 +81,7 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     text: root.displayText
-    tooltipText: monthSummary && monthSummary.hasData
-      ? (monthSummary.monthLabel + "  " + Model.formatMoney(monthSummary.spent) + " spent  ·  " + Model.formatMoney(monthSummary.income) + " in"
-        + (monthSummary.allocated > 0 ? ("  ·  " + Model.formatMoney(monthSummary.allocated) + " reserved") : ""))
-      : "Omakei ledger"
+    tooltipText: Model.barTooltip(root.barSummary)
     active: root.negativeNet
     horizontalMargin: 8.75
     verticalPadding: 8.75

@@ -25,7 +25,9 @@ You do not need a ledger yet.
 1. Click the **Omakei** pill on the bar (or **Open Omakei** in the popup). The editor starts the first time you open it, which takes about a second; nothing runs in the background while Omakei is closed.
 2. Choose the folder that holds your statements — any folder you already use, or an empty one you will drop exports into.
 3. Omakei reads the files, auto-categorizes what it knows, and writes `omakei-ledger.json` into that same folder.
-4. The pill shows this month’s net. It updates whenever the ledger file changes.
+4. The pill shows your net over the month ending today, so it reads the same on
+   the 3rd as on the 23rd rather than sinking every time the big bills land. It
+   updates whenever the ledger file changes.
 
 There is nothing to configure. Omakei records which folder you attached, and the widget reads the ledger from there on its own.
 
