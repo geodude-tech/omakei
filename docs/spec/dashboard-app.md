@@ -134,8 +134,9 @@ five-column grid, each in its own error boundary. See `docs/spec/panel-contract.
 
 ### Needs a category
 
-`unknownMerchants(transactions)` groups every `categoryId === null` transaction
-by `extractMerchant`, sorted by absolute total. Assigning one calls
+`uncategorizedMerchants(transactions)` (in `src/lib/finance/uncategorized.ts`,
+shared with the CLI and the bar popup) groups every `categoryId === null`
+transaction by `extractMerchant`, sorted by absolute total. Assigning one calls
 `categorizeMerchant` → `upsertRule` → `refreshCategories` over the whole ledger,
 so the choice sticks for future imports. Paged at 12.
 
@@ -274,7 +275,7 @@ Verified against the current suite (2026-08-28): 82 tests pass.
 
 ## Open Questions
 
-1. **`unknownMerchants` re-scans the whole ledger on every `transactions`
+1. **`uncategorizedMerchants` re-scans the whole ledger on every `transactions`
    change while `detailsReady`.** Memoized, but O(n) over 30k rows on each
    categorize click. Probably fine; unmeasured.
 2. **`clearLedger` resets `selectedMonth` to the current month** even if the

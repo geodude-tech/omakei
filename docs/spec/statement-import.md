@@ -56,7 +56,7 @@ src/lib/finance/fingerprint.ts  → merchant extraction, the dedupe fingerprint,
 src/lib/finance/transfers.ts    → internal-transfer detection and opposite-leg pairing
 src/lib/finance/ledger.ts       → assignCategory(), mergeImport(), refreshCategories(), user-rule upsert
 src/lib/finance/sync.ts         → read the attached folder, merge, save in one pass
-src/lib/finance/store.ts        → importFiles(), categorizeMerchant/One(), unknownMerchants()
+src/lib/finance/store.ts        → importFiles(), categorizeMerchant/One()
 ```
 
 Tests: `parse.test.ts`, `statements.test.ts`, `fingerprint.test.ts`,

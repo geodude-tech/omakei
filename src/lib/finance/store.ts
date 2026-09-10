@@ -137,20 +137,3 @@ export const useLedgerStore = create<LedgerState>()((set, get) => ({
 useLedgerStore.subscribe((state) => {
   scheduleLedgerSave(state);
 });
-
-export function unknownMerchants(
-  transactions: Transaction[],
-): Array<{ merchant: string; count: number; total: number }> {
-  const map = new Map<string, { count: number; total: number }>();
-  for (const tx of transactions) {
-    if (tx.categoryId) continue;
-    const merchant = extractMerchant(tx.description);
-    const cur = map.get(merchant) ?? { count: 0, total: 0 };
-    cur.count += 1;
-    cur.total += tx.amount;
-    map.set(merchant, cur);
-  }
-  return [...map.entries()]
-    .map(([merchant, v]) => ({ merchant, ...v }))
-    .sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
-}
