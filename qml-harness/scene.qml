@@ -115,8 +115,8 @@ ShellRoot {
       if (widgetErr) console.log("  " + widgetErr)
 
       harness.check("a row per merchant", drops.length === 4)
-      harness.check("the placeholder plus the fixed 17 categories",
-        drops.length > 0 && drops[0].options.length === 18)
+      harness.check("the placeholder plus the fixed 20 categories",
+        drops.length > 0 && drops[0].options.length === 21)
     } else if (harness.step === 2) {
       drops[1].open()
     } else if (harness.step === 3) {

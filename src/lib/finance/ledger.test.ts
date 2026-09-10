@@ -40,10 +40,10 @@ function tx(
 /* ------------------------------------------------------------ assignCategory */
 
 test("assignCategory: a user rule beats a matching default", () => {
-  // "starbucks" is a default → dining.
+  // "starbucks" is a default → coffee.
   const rules = [userRule("starbucks", "groceries"), ...defaults()];
   assert.equal(assignCategory("STARBUCKS STORE 01234", rules), "groceries");
-  assert.equal(assignCategory("STARBUCKS STORE 01234", defaults()), "dining");
+  assert.equal(assignCategory("STARBUCKS STORE 01234", defaults()), "coffee");
 });
 
 test("assignCategory: a structural transfer beats a default", () => {

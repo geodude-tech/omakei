@@ -3,10 +3,12 @@ var TRANSFER_CATEGORY = "transfers"
 var CATEGORY_NAMES = {
   housing: "Housing",
   utilities: "Utilities",
+  insurance: "Insurance",
   groceries: "Groceries",
   transport: "Transport",
   health: "Health",
   childcare: "Child care",
+  pets: "Pets",
   dining: "Dining",
   coffee: "Coffee",
   shopping: "Shopping",
@@ -17,6 +19,7 @@ var CATEGORY_NAMES = {
   income: "Income",
   transfers: "Transfers",
   fees: "Fees & interest",
+  debt: "Debt",
   other: "Other"
 }
 

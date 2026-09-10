@@ -82,10 +82,12 @@ credit-card payments, while net was off only by the set-aside total.
 |---|---|---|
 | `housing` | Housing | living |
 | `utilities` | Utilities | living |
+| `insurance` | Insurance | living |
 | `groceries` | Groceries | living |
 | `transport` | Transport | living |
 | `health` | Health | living |
 | `childcare` | Child care | living |
+| `pets` | Pets | living |
 | `dining` | Dining | lifestyle |
 | `coffee` | Coffee | lifestyle |
 | `shopping` | Shopping | lifestyle |
@@ -96,6 +98,7 @@ credit-card payments, while net was off only by the set-aside total.
 | `income` | Income | income |
 | `transfers` | Transfers | money |
 | `fees` | Fees & interest | money |
+| `debt` | Debt | money |
 | `other` | Other | money |
 
 The source of truth is `CATEGORIES` in `src/lib/finance/categories.ts`, and

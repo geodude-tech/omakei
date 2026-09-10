@@ -23,7 +23,7 @@ Two things have to be true:
   reading, closed for writing.
 
 What this is **not**: no ML, no model call, no classifier training, no
-per-transaction tags beyond the one category. The taxonomy is fixed — 17
+per-transaction tags beyond the one category. The taxonomy is fixed — 20
 categories, 4 groups — and this spec keeps it fixed.
 
 **Relationship to `statement-import.md`:** that spec owns the parse → row → dedupe
@@ -91,7 +91,7 @@ Build:          npm run build            # rebuild + commit dist/ when src/ chan
 ## Project Structure
 
 ```
-src/lib/finance/categories.ts   → CATEGORIES (the fixed 17), DEFAULT_PATTERNS, defaultRules(), categoryName()
+src/lib/finance/categories.ts   → CATEGORIES (the fixed 20), DEFAULT_PATTERNS, defaultRules(), categoryName()
 src/lib/finance/fingerprint.ts  → ruleMatches(), identifierLength(), extractMerchant() — the matcher
 src/lib/finance/ledger.ts       → assignCategory(), bestMatchingRule(), upsertRule(), makeUserRule(), refreshCategories()
 src/lib/finance/transfers.ts    → structural transfer / mortgage categories + opposite-leg pairing (see statement-import.md)

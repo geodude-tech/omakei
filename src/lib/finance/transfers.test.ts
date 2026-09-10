@@ -187,6 +187,49 @@ test("safeway fuel, walmart, and dutch bros use the default categories", () => {
   assert.equal(assignCategory("DUTCH BROS SEATTLE WA", rules), "coffee");
 });
 
+test("a loan payment is Debt, and a mortgage loan is still Housing", () => {
+  const rules = seedRules();
+  assert.equal(assignCategory("AUTO LOAN PAYMENT 1234", rules, "checking", -550), "debt");
+  assert.equal(assignCategory("STUDENT LOAN PMT", rules, "checking", -320), "debt");
+  assert.equal(assignCategory("LOAN PAYMENT 987654", rules, "checking", -550), "debt");
+  // "mortgage loan" is the longer identifier, so it wins even off a mortgage account.
+  assert.equal(assignCategory("MORTGAGE LOAN PAYMENT", rules, "other", -2100), "housing");
+  // From checking, the mortgage leg is still the transfer it always was.
+  assert.equal(assignCategory("MORTGAGE LOAN PAYMENT", rules, "checking", -2100), "transfers");
+  // Driving costs stay in Transport rather than following the loan.
+  assert.equal(assignCategory("CHEVRON 1234 SEATTLE WA", rules, "credit", -48), "transport");
+});
+
+test("insurance is its own category, not Housing or Health", () => {
+  const rules = seedRules();
+  assert.equal(assignCategory("STATE FARM INSURANCE", rules, "checking", -142), "insurance");
+  assert.equal(assignCategory("GEICO *AUTO", rules, "credit", -98), "insurance");
+  assert.equal(assignCategory("RENTERS INSURANCE PREM", rules, "checking", -18), "insurance");
+  // A clinic visit is still Health; only the premium is Insurance.
+  assert.equal(assignCategory("KAISER PERMANENTE CLINIC", rules, "credit", -40), "health");
+  // FARMERS MARKET must not read as Farmers Insurance.
+  assert.equal(assignCategory("FARMERS MARKET #12", rules, "credit", -31), null);
+  // Rent itself did not follow renters insurance out of Housing.
+  assert.equal(assignCategory("RENT PAYMENT APRIL", rules, "credit", -1900), "housing");
+});
+
+test("pets are their own category, and lookalike words are not pets", () => {
+  const rules = seedRules();
+  assert.equal(assignCategory("CHEWY.COM 800-672-4399", rules, "credit", -64), "pets");
+  assert.equal(assignCategory("PETSMART #1234", rules, "credit", -37), "pets");
+  assert.equal(assignCategory("EASTSIDE VETERINARY CLINIC", rules, "credit", -910), "pets");
+  // No bare "pet" or "vet" pattern: these must not land in Pets.
+  assert.equal(assignCategory("CARPET BARN 1200", rules, "credit", -450), null);
+  assert.equal(assignCategory("CORVETTE PARTS CO", rules, "credit", -220), null);
+});
+
+test("coffee and hardware sit where their panels expect them", () => {
+  const rules = seedRules();
+  assert.equal(assignCategory("STARBUCKS STORE 09876", rules, "credit", -6.25), "coffee");
+  assert.equal(assignCategory("THE HOME DEPOT #6161", rules, "credit", -410), "housing");
+  assert.equal(assignCategory("ACE HARDWARE 22", rules, "credit", -28), "housing");
+});
+
 test("longer identifier beats a shorter one (safeway fuel vs safeway)", () => {
   const rules = [
     {
