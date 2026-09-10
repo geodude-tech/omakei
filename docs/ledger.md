@@ -153,6 +153,7 @@ app — the user's categorize rules — and there is a tool for it:
 scripts/omakei-categorize.mjs <pattern> <category-id>   add or update a rule
 scripts/omakei-categorize.mjs --remove <pattern>        drop a rule
 scripts/omakei-categorize.mjs --list                    merchants with no category yet
+scripts/omakei-categorize.mjs --list --json             the same list, as JSON
 scripts/omakei-categorize.mjs --dry-run <pattern> <id>  show the effect, write nothing
 ```
 
@@ -175,10 +176,12 @@ bar watches. That last step is why the popup updates without opening the editor.
 on every load and every folder sync (`refreshCategories`), so an unbacked
 category is overwritten on the next one. Change categories by changing rules.
 
-**Run it with the editor closed.** An open editor tab holds the ledger in memory
-and writes the whole file back on its next edit, which would clobber a
-concurrent change. If the editor is open, reload the tab afterwards to pick the
-new rules up.
+**Safe to run with the editor open.** It used to not be: an open tab held the
+ledger in memory and reinstated it on its next save, so a rule written here
+vanished silently. A save now carries the version it was derived from and is
+refused if the file has moved on, and this tool re-checks immediately before
+writing and retries if it lost. The open tab picks the change up on its next
+save; reload it to see the new rules sooner.
 
 ## Pinning the answer
 

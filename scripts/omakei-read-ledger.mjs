@@ -2,10 +2,21 @@
 /**
  * Print what the widget should show, as one JSON object on stdout:
  *
- *   {"path": "/where/it/was/found", "ledger": {...} | null}
+ *   {"path": "/where/it/was/found",
+ *    "ledger": {...} | null,
+ *    "uncategorized": {"merchants": [{"merchant","count","total"}], "total": 9}}
  *
  * The path comes back because the panel shows it as a hint when there is no
  * data, and only this side knows where the ledger was actually resolved from.
+ *
+ * `uncategorized` is the popup's "Needs a category" section: the merchants with
+ * no category yet, biggest first, each of which becomes a dropdown that runs
+ * `omakei-categorize.mjs`. It is computed here rather than in `Model.js`
+ * because the merchant key comes from `extractMerchant`, and a second
+ * implementation of that in QML would name merchants the CLI does not
+ * recognize. The grouping itself is `src/lib/finance/uncategorized.ts`, shared
+ * with the editor and with `--list`, so all three name the same merchant.
+ * `merchants` is capped; `total` is how many there really are.
  *
  * The bar widget used to read the state file and the ledger itself, through
  * QML's `FileView`. That was a second code path onto disk — the one thing
@@ -40,6 +51,31 @@ import {
   readCapped,
   stateDirFor,
 } from "./ledger-api.mjs";
+import { uncategorizedMerchants } from "../src/lib/finance/uncategorized.ts";
+
+/**
+ * How many merchant rows the popup is handed. The popup is a glance, not the
+ * rules table (docs/spec/bar-widget.md), and a ledger's long tail of one-off
+ * merchants would turn it into one. The rest are `--list` in a terminal.
+ */
+const MAX_MERCHANTS = 6;
+
+const NOTHING = { merchants: [], total: 0 };
+
+/**
+ * The section is the smallest thing here. A ledger the grouping cannot make
+ * sense of costs the popup its "Needs a category" rows and nothing else -- the
+ * month, the categories, and the activity still render.
+ */
+function uncategorizedFor(ledger) {
+  if (!ledger || !Array.isArray(ledger.transactions)) return NOTHING;
+  try {
+    const rows = uncategorizedMerchants(ledger.transactions);
+    return { merchants: rows.slice(0, MAX_MERCHANTS), total: rows.length };
+  } catch {
+    return NOTHING;
+  }
+}
 
 async function resolveLedgerPath(override, env, home) {
   const wanted = expandHome(override, home);
@@ -55,17 +91,21 @@ async function resolveLedgerPath(override, env, home) {
  *  that cannot move them ends up reading the real one. */
 export async function readLedgerForWidget(override = "", { env = process.env, home = homedir() } = {}) {
   const path = await resolveLedgerPath(override, env, home);
-  if (!path) return { path: "", ledger: null };
+  if (!path) return { path: "", ledger: null, uncategorized: NOTHING };
   const raw = await readCapped(path, MAX_LEDGER_BYTES);
   // The path is reported even when the read fails: "there should be a ledger
   // here and there is not" is exactly what the panel's empty state says.
-  if (!raw) return { path, ledger: null };
+  if (!raw) return { path, ledger: null, uncategorized: NOTHING };
+  let ledger = null;
   try {
     const parsed = JSON.parse(raw.toString("utf8"));
-    return { path, ledger: isLedgerPayload(parsed) ? parsed : null };
+    ledger = isLedgerPayload(parsed) ? parsed : null;
   } catch {
-    return { path, ledger: null };
+    return { path, ledger: null, uncategorized: NOTHING };
   }
+  // Outside the parse guard on purpose: grouping the merchants must never be
+  // able to turn a ledger that parsed into one the widget is told is missing.
+  return { path, ledger, uncategorized: uncategorizedFor(ledger) };
 }
 
 if (process.argv[1]?.endsWith("omakei-read-ledger.mjs")) {

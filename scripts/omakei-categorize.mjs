@@ -6,6 +6,7 @@
  *   omakei-categorize.mjs <pattern> <category-id>      add or update a user rule
  *   omakei-categorize.mjs --remove <pattern>           drop a user rule
  *   omakei-categorize.mjs --list                       merchants with no category yet
+ *   omakei-categorize.mjs --list --json                the same list, as JSON
  *   omakei-categorize.mjs --dry-run <pattern> <id>     show what would change, write nothing
  *
  * A <pattern> is a key identifier ("safeway"), not the whole bank line, matched
@@ -39,7 +40,7 @@ import {
 } from "./ledger-api.mjs";
 import { CATEGORIES } from "../src/lib/finance/categories.ts";
 import { refreshCategories, seedRules, upsertRule } from "../src/lib/finance/ledger.ts";
-import { extractMerchant } from "../src/lib/finance/fingerprint.ts";
+import { uncategorizedMerchants } from "../src/lib/finance/uncategorized.ts";
 
 const CATEGORY_IDS = CATEGORIES.map((c) => c.id);
 
@@ -60,22 +61,6 @@ function userRules(snapshot) {
 /** Re-run the shipped categorizer: user rules first, then the built-ins. */
 function derive(transactions, users) {
   return refreshCategories(transactions, [...users, ...seedRules()]);
-}
-
-/** Mirrors store.ts `unknownMerchants`: null-category rows, grouped, biggest first. */
-function uncategorizedMerchants(transactions) {
-  const map = new Map();
-  for (const tx of transactions) {
-    if (tx.categoryId) continue;
-    const merchant = extractMerchant(tx.description);
-    const cur = map.get(merchant) ?? { count: 0, total: 0 };
-    cur.count += 1;
-    cur.total += tx.amount;
-    map.set(merchant, cur);
-  }
-  return [...map.entries()]
-    .map(([merchant, v]) => ({ merchant, ...v }))
-    .sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
 }
 
 function retagged(before, after) {
@@ -136,8 +121,11 @@ export async function run(argv, options = {}) {
 async function attempt(argv, { env = process.env, home = homedir() } = {}) {
   const args = [...argv];
   const list = takeFlag(args, "--list");
+  const json = takeFlag(args, "--json");
   const dryRun = takeFlag(args, "--dry-run");
   const remove = takeFlag(args, "--remove");
+
+  if (json && !list) return fail("--json only applies to --list.");
 
   const path = await resolveLedgerPath(env, home);
   if (!path) return fail("No ledger found. Attach a folder in the editor first.");
@@ -161,6 +149,13 @@ async function attempt(argv, { env = process.env, home = homedir() } = {}) {
 
   if (list) {
     const rows = uncategorizedMerchants(before);
+    // `--json` is for a caller that is going to do something with the answer
+    // rather than read it: an agent picking merchants to write rules for. The
+    // empty case is an empty array, not a sentence.
+    if (json) {
+      process.stdout.write(`${JSON.stringify(rows)}\n`);
+      return 0;
+    }
     if (rows.length === 0) {
       process.stdout.write("Nothing uncategorized.\n");
       return 0;
@@ -192,7 +187,7 @@ async function attempt(argv, { env = process.env, home = homedir() } = {}) {
 
   if (!pattern || !categoryId) {
     return fail(
-      "Usage: omakei-categorize.mjs <pattern> <category-id>  (also --list, --remove, --dry-run)",
+      "Usage: omakei-categorize.mjs <pattern> <category-id>  (also --list [--json], --remove, --dry-run)",
     );
   }
   if (!CATEGORY_IDS.includes(categoryId)) {

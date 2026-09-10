@@ -151,6 +151,29 @@ test("--list prints uncategorized merchants, biggest first", () => {
   assert.match(lines[0], /-\$42\.50/);
 });
 
+test("--list --json prints the same merchants a caller can act on", () => {
+  const { home } = attachedLedger(TX);
+  const { status, stdout } = cli(["--list", "--json"], home);
+  assert.equal(status, 0);
+  assert.deepEqual(JSON.parse(stdout), [{ merchant: "ZORP WIDGETS", count: 2, total: -42.5 }]);
+});
+
+test("--list --json says nothing with an empty array, not a sentence", () => {
+  const { home } = attachedLedger([TX[0]]);
+  const { status, stdout } = cli(["--list", "--json"], home);
+  assert.equal(status, 0);
+  assert.deepEqual(JSON.parse(stdout), []);
+});
+
+test("--json without --list is refused rather than ignored", () => {
+  const { home, ledgerPath } = attachedLedger(TX);
+  const before = readFileSync(ledgerPath, "utf8");
+  const { status, stderr } = cli(["--json", "zorp widgets", "shopping"], home);
+  assert.equal(status, 1);
+  assert.match(stderr, /--json only applies to --list/);
+  assert.equal(readFileSync(ledgerPath, "utf8"), before);
+});
+
 test("an unknown category id fails and writes nothing", () => {
   const { home, ledgerPath } = attachedLedger(TX);
   const before = readFileSync(ledgerPath, "utf8");

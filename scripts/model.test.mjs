@@ -3,11 +3,15 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+// The popup offers these ids to omakei-categorize.mjs, which validates against
+// this same list. Model.js cannot import it -- it is ES5 for the QML engine --
+// so the test is what keeps the two copies honest.
+import { CATEGORIES } from "../src/lib/finance/categories.ts";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = readFileSync(join(ROOT, "Model.js"), "utf8");
 const Model = new Function(
-  `${src}\nreturn { editorUrl, editorQuery, emptySummary, summarize, parseSetAsides, openEditorCommand, shellQuote, revisionFilePath, parseLedger, parseReaderOutput, latestMonth, openingMonth, dailySpend, daysInMonth };`,
+  `${src}\nreturn { editorUrl, editorQuery, emptySummary, summarize, parseSetAsides, openEditorCommand, shellQuote, revisionFilePath, parseLedger, parseReaderOutput, latestMonth, openingMonth, dailySpend, daysInMonth, categoryOptions, categorizeCommand };`,
 )();
 
 test("editorUrl carries the month the popup was showing", () => {
@@ -175,11 +179,71 @@ test("parseReaderOutput keeps the path when there is no ledger there yet", () =>
 });
 
 test("parseReaderOutput survives anything the reader could go wrong with", () => {
-  const empty = { path: "", ledger: null };
+  const empty = { path: "", ledger: null, uncategorized: { merchants: [], total: 0 } };
   assert.deepEqual(Model.parseReaderOutput(""), empty);
   assert.deepEqual(Model.parseReaderOutput("null"), empty);
   assert.deepEqual(Model.parseReaderOutput("{trunca"), empty, "a half-written pipe must not throw");
   assert.deepEqual(Model.parseReaderOutput(JSON.stringify({ ledger: { version: 9 } })), empty);
+});
+
+test("parseReaderOutput carries the merchants that need a category", () => {
+  const out = Model.parseReaderOutput(
+    JSON.stringify({
+      path: "/s/omakei-ledger.json",
+      ledger: { version: 1, transactions: [{ date: "2026-08-02", amount: -4.5 }] },
+      uncategorized: {
+        merchants: [
+          { merchant: "ZORP WIDGETS", count: 2, total: -42.5 },
+          { merchant: "", count: 1, total: -1 },
+          null,
+        ],
+        total: 9,
+      },
+    }),
+  );
+  assert.deepEqual(out.uncategorized.merchants, [{ merchant: "ZORP WIDGETS", count: 2, total: -42.5 }]);
+  assert.equal(out.uncategorized.total, 9, "the count is what the ledger holds, not what fits");
+});
+
+test("parseUncategorized never reports fewer merchants than it hands over", () => {
+  const out = Model.parseReaderOutput(
+    JSON.stringify({
+      uncategorized: { merchants: [{ merchant: "ZORP WIDGETS", count: 1, total: -1 }], total: "nonsense" },
+    }),
+  );
+  assert.equal(out.uncategorized.total, 1, "a bad total falls back to the rows themselves");
+});
+
+test("categoryOptions offers the app's categories, placeholder first", () => {
+  const options = Model.categoryOptions("Categorize…");
+  assert.deepEqual(options[0], { value: "", label: "Categorize…" });
+  assert.deepEqual(
+    options.slice(1).map((o) => o.value),
+    CATEGORIES.map((c) => c.id),
+    "the popup must not offer an id omakei-categorize.mjs would reject",
+  );
+  assert.deepEqual(
+    options.slice(1).map((o) => o.label),
+    CATEGORIES.map((c) => c.name),
+  );
+  assert.equal(Model.categoryOptions()[0].value, "housing", "no placeholder unless one is asked for");
+});
+
+test("categorizeCommand runs the CLI, and nothing half-formed", () => {
+  assert.deepEqual(Model.categorizeCommand("/p/omakei/", "ZORP WIDGETS", "shopping"), [
+    "/p/omakei/scripts/omakei-categorize.mjs",
+    "ZORP WIDGETS",
+    "shopping",
+  ]);
+  assert.deepEqual(Model.categorizeCommand("", "ZORP WIDGETS", "shopping"), [], "no plugin dir");
+  assert.deepEqual(Model.categorizeCommand("/p", "   ", "shopping"), [], "no merchant");
+  assert.deepEqual(Model.categorizeCommand("/p", "ZORP", ""), [], "no category");
+  assert.deepEqual(Model.categorizeCommand("/p", "ZORP", "nonsense"), [], "not a category");
+  assert.deepEqual(
+    Model.categorizeCommand("/p", "ZORP", "constructor"),
+    [],
+    "an inherited property is not a category",
+  );
 });
 
 test("parseLedger still parses a raw ledger, unchanged", () => {
