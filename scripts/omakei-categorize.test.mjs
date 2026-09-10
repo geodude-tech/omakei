@@ -82,7 +82,7 @@ test("adding a rule re-tags matching rows and leaves the defaults alone", () => 
   assert.match(stdout, /2 transactions re-tagged/);
 
   assert.deepEqual(categories(ledgerPath), {
-    a: "dining", // default, untouched
+    a: "coffee", // default, untouched
     b: "shopping", // the new rule
     c: "shopping",
     d: "subscriptions", // default, untouched
@@ -113,7 +113,7 @@ test("--remove drops the rule and reverts its rows", () => {
   const { status } = cli(["--remove", "zorp widgets"], home);
   assert.equal(status, 0);
   assert.deepEqual(categories(ledgerPath), {
-    a: "dining",
+    a: "coffee",
     b: null,
     c: null,
     d: "subscriptions",

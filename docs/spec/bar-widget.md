@@ -156,7 +156,7 @@ minute precision rolls `viewMonth` forward at midnight only when still following
 ### Categorizing a merchant from the popup
 
 Under the stat line, "Needs a category" lists the merchants with no category
-yet, biggest first, each with a dropdown of the fixed 17. Picking one runs
+yet, biggest first, each with a dropdown of the fixed 20. Picking one runs
 `omakei-categorize.mjs <merchant> <category>` — one value, one command — which
 writes the rule, re-derives every transaction, and bumps the revision file, so
 the row leaves on the read that follows.

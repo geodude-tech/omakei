@@ -62,5 +62,5 @@ test("loadSnapshot with no stored rules falls back to the defaults", () => {
     rules: [],
     selectedMonth: "2026-08",
   });
-  assert.equal(useLedgerStore.getState().transactions[0]!.categoryId, "dining");
+  assert.equal(useLedgerStore.getState().transactions[0]!.categoryId, "coffee");
 });
