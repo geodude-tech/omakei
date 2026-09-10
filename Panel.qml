@@ -66,6 +66,41 @@ Panel {
     return Model.summarize(ledger && ledger.transactions, now, ledger && ledger.setAsides)
   }
 
+  /**
+   * In minus out over the month ending today, which is what the headline and
+   * the bar show. See `Model.rollingSummary` for why it beats the month-to-date
+   * figure: the mortgage and child care land on the 1st and the income that
+   * covers them arrives later, so the calendar month opens deeply negative
+   * every month regardless of how the finances are actually going.
+   */
+  readonly property var rollingSummary: Model.rollingSummary(
+    ledger && ledger.transactions, ledger && ledger.setAsides, today)
+
+  /**
+   * A ledger that does not reach back a full month would report a month of
+   * income against a week of spending, so it keeps the month figure until the
+   * history is there.
+   */
+  readonly property bool rollingReady: !!(rollingSummary && rollingSummary.complete && rollingSummary.hasData)
+
+  /** Past months are shown as themselves; only the current month rolls. */
+  readonly property bool rollingHeadline: rollingReady && viewMonth === Model.currentMonth(today)
+
+  /** The big number: the rolling window on this month, the month itself before. */
+  readonly property real headlineNet: rollingHeadline ? rollingSummary.net : monthSummary.net
+
+  /**
+   * The spent/in pair reads off the same window as the headline, so the big
+   * number decomposes into the two figures under it. Month-to-date would put
+   * "$0 in" beneath a healthy headline for the first half of every month --
+   * true of the month, and an invitation to read the headline as wrong.
+   */
+  readonly property real headlineSpent: rollingHeadline ? rollingSummary.spent : monthSummary.spent
+  readonly property real headlineIncome: rollingHeadline ? rollingSummary.income : monthSummary.income
+
+  /** The bar always speaks for now, whatever month the popup is browsing. */
+  readonly property var barSummary: rollingReady ? rollingSummary : currentSummary
+
   readonly property real maxCategory: {
     if (!monthSummary.cats || monthSummary.cats.length === 0) return 1
     return Math.max(1, monthSummary.cats[0].total)
@@ -228,12 +263,18 @@ Panel {
   SystemClock {
     id: clock
     precision: SystemClock.Minutes
+    /**
+     * The day, not just the month. The headline window ends today, so a popup
+     * left open overnight would otherwise keep reporting yesterday's month
+     * until something else forced a refresh. Which month is on screen still
+     * only moves when the month itself turns over.
+     */
     onDateChanged: {
-      var next = Model.currentMonth(clock.date)
-      if (next === Model.currentMonth(root.today)) return
-      var follow = root.followLedgerMonth || root.viewMonth === Model.currentMonth(root.today)
+      if (Model.currentDay(clock.date) === Model.currentDay(root.today)) return
+      var wasMonth = Model.currentMonth(root.today)
+      var follow = root.followLedgerMonth || root.viewMonth === wasMonth
       root.today = clock.date
-      if (follow) root.goToCurrentMonth()
+      if (follow && Model.currentMonth(clock.date) !== wasMonth) root.goToCurrentMonth()
     }
   }
 
@@ -334,11 +375,37 @@ Panel {
           Text {
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
-            text: Model.formatMoney(root.monthSummary.net, { sign: true })
-            color: root.netColor(root.monthSummary.net)
+            text: Model.formatMoney(root.headlineNet, { sign: true })
+            color: root.netColor(root.headlineNet)
             font.family: root.contentFontFamily
             font.pixelSize: 42
             font.bold: true
+          }
+
+          /**
+           * The headline is a window, not the month above it, so it says which
+           * one -- and keeps the month-to-date figure in view underneath, since
+           * that is the number the month header would otherwise promise.
+           */
+          Text {
+            width: parent.width
+            visible: root.rollingHeadline
+            horizontalAlignment: Text.AlignHCenter
+            text: root.rollingSummary.label
+            color: root.contentDim
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.body
+          }
+
+          Text {
+            width: parent.width
+            visible: root.rollingHeadline
+            horizontalAlignment: Text.AlignHCenter
+            text: root.monthSummary.monthLabel + " so far  "
+              + Model.formatMoney(root.monthSummary.net, { sign: true })
+            color: root.contentDim
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.body
           }
 
           /**
@@ -470,7 +537,7 @@ Panel {
             visible: root.monthSummary.hasData
 
             Text {
-              text: Model.formatMoney(root.monthSummary.spent) + " spent"
+              text: Model.formatMoney(root.headlineSpent) + " spent"
               color: root.contentDim
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.body
@@ -482,7 +549,7 @@ Panel {
               font.pixelSize: Style.font.body
             }
             Text {
-              text: Model.formatMoney(root.monthSummary.income) + " in"
+              text: Model.formatMoney(root.headlineIncome) + " in"
               color: root.contentDim
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.body

@@ -11,7 +11,7 @@ import { CATEGORIES } from "../src/lib/finance/categories.ts";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = readFileSync(join(ROOT, "Model.js"), "utf8");
 const Model = new Function(
-  `${src}\nreturn { editorUrl, editorQuery, emptySummary, summarize, parseSetAsides, openEditorCommand, shellQuote, revisionFilePath, parseLedger, parseReaderOutput, latestMonth, openingMonth, dailySpend, daysInMonth, categoryOptions, categorizeCommand };`,
+  `${src}\nreturn { editorUrl, editorQuery, emptySummary, summarize, parseSetAsides, openEditorCommand, shellQuote, revisionFilePath, parseLedger, parseReaderOutput, latestMonth, openingMonth, dailySpend, daysInMonth, categoryOptions, categorizeCommand, rollingSummary, trailingStart, barTooltip, currentDay };`,
 )();
 
 test("editorUrl carries the month the popup was showing", () => {
@@ -293,4 +293,114 @@ test("dailySpend is safe on an empty or missing ledger", () => {
     empty.days.every((d) => d.cumulative === 0),
     true,
   );
+});
+
+/**
+ * The window arithmetic. One month back, clamped, then opened the day after,
+ * so every day-of-month falls inside exactly once.
+ */
+test("trailingStart opens the day after the same date a month back", () => {
+  assert.equal(Model.trailingStart("2026-09-09"), "2026-08-10");
+  assert.equal(Model.trailingStart("2026-01-05"), "2025-12-06");
+  // No Feb 30, so the clamp lands on Feb 28 and the window opens on Mar 1.
+  assert.equal(Model.trailingStart("2026-03-30"), "2026-03-01");
+  // A leap February holds the extra day, so the same end date in 2028 opens a
+  // day earlier than it does in 2026.
+  assert.equal(Model.trailingStart("2028-03-28"), "2028-02-29");
+  assert.equal(Model.trailingStart("2026-03-28"), "2026-03-01");
+  // Month end to month end stays a whole month.
+  assert.equal(Model.trailingStart("2026-07-31"), "2026-07-01");
+});
+
+test("rollingSummary counts the month ending today, not the month so far", () => {
+  const transactions = [
+    // Last month's pay, inside the window.
+    { date: "2026-08-14", amount: 4100, description: "Payroll", categoryId: "income" },
+    { date: "2026-08-28", amount: 4100, description: "Payroll", categoryId: "income" },
+    // Last month's mortgage, on the 1st, outside a window that opens the 10th.
+    { date: "2026-08-01", amount: -2600, description: "Mortgage", categoryId: "housing" },
+    // This month's big outs, inside.
+    { date: "2026-09-01", amount: -2600, description: "Mortgage", categoryId: "housing" },
+    { date: "2026-09-02", amount: -1800, description: "Day care", categoryId: "childcare" },
+    { date: "2026-09-06", amount: -140.5, description: "Groceries", categoryId: "groceries" },
+    // Transfers are neither in nor out, here as in the month figure.
+    { date: "2026-09-03", amount: -900, description: "To savings", categoryId: "transfers" },
+    // Tomorrow, and so outside a window that ends today.
+    { date: "2026-09-10", amount: -60, description: "Gas", categoryId: "transport" },
+  ];
+
+  const rolling = Model.rollingSummary(transactions, [], "2026-09-09");
+  assert.equal(rolling.start, "2026-08-10");
+  assert.equal(rolling.end, "2026-09-09");
+  assert.equal(rolling.label, "Aug 10 – Sep 9");
+  assert.equal(rolling.income, 8200);
+  assert.equal(rolling.spent, 4540.5);
+  assert.equal(rolling.net, 3659.5);
+  assert.ok(rolling.hasData);
+
+  // The same ledger read as a calendar month is deep in the red, which is the
+  // number this replaces. It also counts the whole month, tomorrow included.
+  const month = Model.summarize(transactions, "2026-09", []);
+  assert.equal(month.net, -4600.5);
+});
+
+test("rollingSummary subtracts the month's set-asides in full", () => {
+  const transactions = [
+    { date: "2026-08-14", amount: 3000, description: "Payroll", categoryId: "income" },
+    { date: "2026-09-01", amount: -1000, description: "Mortgage", categoryId: "housing" },
+  ];
+  const rolling = Model.rollingSummary(
+    transactions,
+    [{ id: "tax", name: "Filing taxes", amount: 500 }],
+    "2026-09-09",
+  );
+  assert.equal(rolling.allocated, 500);
+  assert.equal(rolling.net, 1500);
+});
+
+/**
+ * The guard that matters on a fresh install: a ledger holding only this
+ * month's statement would report a month of income against a week of spend.
+ */
+test("rollingSummary is incomplete when the ledger stops inside the window", () => {
+  const short = [{ date: "2026-09-02", amount: -1800, description: "Day care" }];
+  assert.equal(Model.rollingSummary(short, [], "2026-09-09").complete, false);
+  assert.equal(Model.rollingSummary([], [], "2026-09-09").complete, false);
+
+  const reaching = [
+    { date: "2026-08-10", amount: -20, description: "Coffee" },
+    ...short,
+  ];
+  assert.equal(Model.rollingSummary(reaching, [], "2026-09-09").complete, true);
+});
+
+test("rollingSummary accepts a Date as well as a day string", () => {
+  const rows = [{ date: "2026-09-05", amount: -25, description: "Coffee" }];
+  const fromDate = Model.rollingSummary(rows, [], new Date(2026, 8, 9));
+  assert.equal(fromDate.end, "2026-09-09");
+  assert.equal(fromDate.start, "2026-08-10");
+});
+
+test("barTooltip names the window the bar number covers", () => {
+  const rolling = {
+    hasData: true,
+    label: "Aug 10 – Sep 9",
+    spent: 4540.5,
+    income: 8200,
+    allocated: 0,
+  };
+  assert.equal(Model.barTooltip(rolling), "Aug 10 – Sep 9  $4,541 spent  ·  $8,200 in");
+  // A month summary names its month instead, and reserves show when set.
+  assert.equal(
+    Model.barTooltip({ ...rolling, monthLabel: "September 2026", label: "", allocated: 500 }),
+    "September 2026  $4,541 spent  ·  $8,200 in  ·  $500 reserved",
+  );
+  assert.equal(Model.barTooltip({ hasData: false }), "Omakei ledger");
+  assert.equal(Model.barTooltip(null), "Omakei ledger");
+});
+
+test("currentDay reads a Date in local time and passes a day string through", () => {
+  assert.equal(Model.currentDay(new Date(2026, 8, 9)), "2026-09-09");
+  assert.equal(Model.currentDay(new Date(2026, 0, 5)), "2026-01-05");
+  assert.equal(Model.currentDay("2026-09-09"), "2026-09-09");
 });
