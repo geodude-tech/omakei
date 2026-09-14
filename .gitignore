@@ -23,6 +23,9 @@ folio-ledger.json
 *.ofx
 *.qfx
 *.ofc
+# The importer cannot read a PDF, but a statement folder holds them anyway and
+# scripts/omakei-convert-boa-pdf.mjs now reads one on purpose.
+*.pdf
 Financial_Statements/
 data/statements/
 statements/

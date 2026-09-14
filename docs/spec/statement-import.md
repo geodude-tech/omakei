@@ -115,6 +115,19 @@ the text contains `<OFX>` or `<STMTTRN>`. Everything else goes through the
 delimited parser, whose delimiter is whichever of `, \t ; |` appears most in the
 first line.
 
+`STATEMENT_EXTS` is an allowlist, so a file with any other extension is filtered
+out before the parser sees it. PDF is the one users actually hit, because some
+banks make the PDF the easiest monthly download. It stays unsupported on purpose:
+every usable PDF text extractor is a dependency, and this server has none.
+
+Converting happens outside the plugin instead.
+`scripts/omakei-convert-boa-pdf.mjs` turns a Bank of America card statement into
+a CSV this parser already reads, using `pdftotext` from poppler. It is one bank's
+layout by design rather than a general PDF importer, and it reconciles its parsed
+rows against the totals the statement prints before writing anything, so an
+unrecognized layout exits non-zero instead of emitting a half-right CSV. A second
+bank is a second script beside it, not a generalization of this one.
+
 ### Column detection (delimited)
 
 1. If the first row looks like a header (`rowLooksLikeHeader`), map columns by

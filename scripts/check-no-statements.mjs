@@ -4,7 +4,9 @@
  */
 import { execFileSync } from "node:child_process";
 
-const BLOCKED = /\.(csv|tsv|ofx|qfx|ofc)$/i;
+// `.pdf` is here even though the importer cannot read one: a statement folder
+// holds PDFs regardless, and `omakei-convert-boa-pdf.mjs` reads one on purpose.
+const BLOCKED = /\.(csv|tsv|ofx|qfx|ofc|pdf)$/i;
 // `folio-ledger.json` is what an early build wrote; still blocked so an old
 // one cannot be committed by accident.
 const BLOCKED_PATH =
