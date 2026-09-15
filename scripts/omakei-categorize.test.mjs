@@ -243,3 +243,41 @@ test("a save the editor derived before the rule was written cannot undo it", asy
   assert.deepEqual(late.ledger.rules.map((r) => r.pattern), ["zorp widgets"]);
 });
 
+test("CHECK <category> pins the outstanding checks and writes no rule", async () => {
+  const { home, statements } = await attachedLedger([
+    txOf("k1", "CHECK", -2380.26),
+    txOf("k2", "CHECK", -2496.62),
+    ...TX,
+  ]);
+  const { status, stdout } = cli(["CHECK", "childcare"], home);
+  assert.equal(status, 0);
+  assert.match(stdout, /Pinned 2 transactions → childcare \(no rule written\)/);
+
+  assert.deepEqual((await readLedger(statements)).rules, []);
+  const cats = await categories(statements);
+  assert.equal(cats.k1, "childcare");
+  assert.equal(cats.k2, "childcare");
+  assert.equal(cats.b, null, "other merchants untouched");
+  const k1 = (await readLedger(statements)).transactions.find((t) => t.id === "k1");
+  assert.equal(k1.pinnedCategoryId, "childcare", "the pin is stored, not just the category");
+
+  // Another rule write re-derives everything; the pins hold, and there is
+  // nothing left under CHECK to pin.
+  cli(["zorp widgets", "shopping"], home);
+  assert.equal((await categories(statements)).k1, "childcare");
+  const again = cli(["CHECK", "childcare"], home);
+  assert.equal(again.status, 1);
+  assert.match(again.stderr, /Nothing under "CHECK" needs a category/);
+});
+
+test("--pin categorizes one transaction by id, and an unknown id writes nothing", async () => {
+  const { home, statements } = await attachedLedger([txOf("k1", "CHECK", -10), txOf("k2", "CHECK", -20)]);
+  assert.equal(cli(["--pin", "k2", "gifts"], home).status, 1, "unknown category refused");
+  assert.equal(cli(["--pin", "k2", "shopping"], home).status, 0);
+  assert.deepEqual(await categories(statements), { k1: null, k2: "shopping" });
+
+  const before = await readLedgerDb(statements);
+  const missing = cli(["--pin", "nope", "shopping"], home);
+  assert.equal(missing.status, 1);
+  await unchanged(statements, before);
+});
