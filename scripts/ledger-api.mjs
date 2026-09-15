@@ -489,11 +489,17 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
   async function currentDir() {
     if (cached === undefined) {
       const raw = await readCapped(statePath, MAX_STATE_BYTES);
-      const saved = parseStateFile(raw ? raw.toString("utf8") : "");
+      const text = raw ? raw.toString("utf8") : "";
+      const saved = parseStateFile(text);
       // The env var is a convenience default for development. It seeds the
       // same state every other install writes, so no code path is dev-only.
       cached = saved?.statementsDir || (seedDir ? resolve(expandHome(seedDir, home)) : null);
       if (!saved && cached) await persist(cached);
+      // A state file written before the ledger moved to SQLite names the JSON
+      // as `ledgerPath`, and nothing else would ever rewrite it: it changes only
+      // on attach. An agent following docs/ledger.md would then read a ledger
+      // nothing writes any more, so the server brings it up to date on startup.
+      else if (saved && text !== renderStateFile(saved.statementsDir)) await persist(saved.statementsDir);
     }
     return cached;
   }
