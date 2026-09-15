@@ -110,7 +110,7 @@ test("every write moves the etag, and a decision sees the etag it is deciding ag
   assert.notEqual(first.etag, "");
   assert.notEqual(second.etag, first.etag);
 
-  const stale = await updateLedgerDb(dir, (current, etag) => (etag === first.etag ? LEDGER : null));
+  const stale = await updateLedgerDb(dir, ({ etag }) => (etag === first.etag ? LEDGER : null));
   assert.equal(stale.written, false);
   assert.equal(stale.etag, second.etag);
   assert.equal(stale.ledger.selectedMonth, "2026-09");
@@ -143,7 +143,7 @@ test("two processes writing against the same etag: exactly one lands", async () 
       const script = `
         import { updateLedgerDb } from ${JSON.stringify(moduleUrl)};
         const ledger = ${JSON.stringify(LEDGER)};
-        const r = await updateLedgerDb(${JSON.stringify(dir)}, (cur, etag) =>
+        const r = await updateLedgerDb(${JSON.stringify(dir)}, ({ etag }) =>
           etag === ${JSON.stringify(etag)} ? { ...ledger, selectedMonth: ${JSON.stringify(month)} } : null);
         process.stdout.write(String(r.written));`;
       const p = spawn(process.execPath, ["--input-type=module", "-e", script]);
@@ -254,4 +254,9 @@ test("a SQLite file that is not an Omakei ledger is not read", async () => {
   db.exec("CREATE TABLE something (x); INSERT INTO something VALUES (1)");
   db.close();
   assert.equal(await readLedgerDb(dir), null);
+  assert.equal(await write(dir, LEDGER), null, "and a write does not adopt it");
+  const after = new DatabaseSync(join(dir, DB_FILENAME), { readOnly: true });
+  const tables = after.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
+  after.close();
+  assert.deepEqual(tables, ["something"]);
 });
