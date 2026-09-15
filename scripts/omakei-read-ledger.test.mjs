@@ -53,12 +53,14 @@ function unknownTx(id, description, amount) {
   };
 }
 
-test("the ledger the state file points at is returned", async () => {
+const writeDb = (dir, ledger) => updateLedgerDb(dir, () => ledger);
+
+test("the ledger in the folder the state file points at is returned", async () => {
   const { home, statements } = attachedHome();
-  writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify(LEDGER));
+  await writeDb(statements, LEDGER);
   const { ledger, path } = await readLedgerForWidget("", envFor(home));
-  assert.equal(ledger.transactions.length, 1);
-  assert.equal(path, join(statements, "omakei-ledger.json"));
+  assert.deepEqual(ledger.transactions.map((t) => t.id), ["a"]);
+  assert.equal(path, join(statements, "omakei-ledger.sqlite"));
 });
 
 test("nothing attached reads as null rather than an error", async () => {
@@ -71,17 +73,30 @@ test("nothing attached reads as null rather than an error", async () => {
   });
 });
 
-test("a symlinked ledger is refused", async () => {
+test("a folder with no database reads as null, reports where it looked, and creates nothing", async () => {
+  const { home, statements } = attachedHome();
+  writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify(LEDGER));
+  const out = await readLedgerForWidget("", envFor(home));
+  assert.equal(out.ledger, null, "a leftover JSON ledger is not read");
+  assert.equal(out.path, join(statements, "omakei-ledger.sqlite"));
+  assert.deepEqual(out.uncategorized, NOTHING_UNCATEGORIZED);
+  assert.deepEqual(readdirSync(statements), ["omakei-ledger.json"]);
+});
+
+test("a symlinked database is refused", async () => {
   const { root, home, statements } = attachedHome();
-  const outside = join(root, "elsewhere.json");
-  writeFileSync(outside, JSON.stringify(LEDGER));
-  symlinkSync(outside, join(statements, "omakei-ledger.json"));
-  assert.equal((await readLedgerForWidget("", envFor(home))).ledger, null);
+  const elsewhere = join(root, "elsewhere");
+  mkdirSync(elsewhere);
+  await writeDb(elsewhere, LEDGER);
+  symlinkSync(join(elsewhere, "omakei-ledger.sqlite"), join(statements, "omakei-ledger.sqlite"));
+  const out = await readLedgerForWidget("", envFor(home));
+  assert.equal(out.ledger, null);
+  assert.equal(out.path, join(statements, "omakei-ledger.sqlite"));
 });
 
 test("a symlinked state file is refused", async () => {
   const { root, home, statements } = attachedHome();
-  writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify(LEDGER));
+  await writeDb(statements, LEDGER);
   const decoy = join(root, "decoy-state.json");
   writeFileSync(decoy, renderStateFile(statements));
   const statePath = join(home, ".local", "state", "omakei", "state.json");
@@ -90,26 +105,10 @@ test("a symlinked state file is refused", async () => {
   assert.equal((await readLedgerForWidget("", envFor(home))).ledger, null);
 });
 
-test("a ledger over the cap never reaches the widget", async () => {
+test("a FIFO in the database's place does not hang the read", async () => {
   const { home, statements } = attachedHome();
-  // Valid JSON above the cap: a sparse file would fail to parse and would
-  // prove nothing about the size limit.
-  writeFileSync(
-    join(statements, "omakei-ledger.json"),
-    JSON.stringify({
-      version: 1,
-      rules: [],
-      transactions: [{ id: "a", note: "x".repeat(21 * 1024 * 1024) }],
-    }),
-  );
-  assert.equal((await readLedgerForWidget("", envFor(home))).ledger, null);
-});
-
-test("a FIFO in the ledger's place does not hang the read", async () => {
-  const { home, statements } = attachedHome();
-  const fifo = join(statements, "omakei-ledger.json");
   try {
-    execFileSync("mkfifo", [fifo]);
+    execFileSync("mkfifo", [join(statements, "omakei-ledger.sqlite")]);
   } catch {
     return; // no mkfifo here; nothing to assert
   }
@@ -120,23 +119,16 @@ test("a FIFO in the ledger's place does not hang the read", async () => {
   assert.equal(ledger, null);
 });
 
-test("a ledger that is not a ledger is refused", async () => {
+test("the override wins over the state file, as the database or its folder, and ~ expands", async () => {
   const { home, statements } = attachedHome();
-  writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify({ version: 9, nope: true }));
-  assert.equal((await readLedgerForWidget("", envFor(home))).ledger, null);
-  writeFileSync(join(statements, "omakei-ledger.json"), "not json at all");
-  assert.equal((await readLedgerForWidget("", envFor(home))).ledger, null);
-});
-
-test("the override wins over the state file, and ~ expands", async () => {
-  const { home, statements } = attachedHome();
-  writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify(LEDGER));
-  const other = { version: 1, rules: [], transactions: [{ id: "b" }, { id: "c" }] };
-  writeFileSync(join(home, "other.json"), JSON.stringify(other));
-  const byAbsolute = await readLedgerForWidget(join(home, "other.json"), envFor(home));
-  assert.equal(byAbsolute.ledger.transactions.length, 2);
-  const byTilde = await readLedgerForWidget("~/other.json", envFor(home));
-  assert.equal(byTilde.ledger.transactions.length, 2);
+  await writeDb(statements, LEDGER);
+  const other = join(home, "Other");
+  mkdirSync(other);
+  await writeDb(other, { version: 1, rules: [], transactions: [{ id: "b" }, { id: "c" }] });
+  for (const override of [join(other, "omakei-ledger.sqlite"), other, "~/Other", "~/Other/omakei-ledger.sqlite"]) {
+    const { ledger } = await readLedgerForWidget(override, envFor(home));
+    assert.equal(ledger.transactions.length, 2, override);
+  }
 });
 
 test("the CLI prints JSON and exits cleanly with nothing attached", () => {
@@ -153,6 +145,18 @@ test("the CLI prints JSON and exits cleanly with nothing attached", () => {
   );
 });
 
+test("the CLI prints the database's ledger as JSON", async () => {
+  const { home, statements } = attachedHome();
+  await writeDb(statements, LEDGER);
+  const out = execFileSync("node", ["scripts/omakei-read-ledger.mjs"], {
+    encoding: "utf8",
+    env: { ...process.env, HOME: home, XDG_STATE_HOME: join(home, ".local", "state") },
+  });
+  const parsed = JSON.parse(out);
+  assert.equal(parsed.path, join(statements, "omakei-ledger.sqlite"));
+  assert.equal(parsed.ledger.transactions[0].id, "a");
+});
+
 test("the merchants that need a category come back, biggest first and capped", async () => {
   const { home, statements } = attachedHome();
   const transactions = [
@@ -166,77 +170,11 @@ test("the merchants that need a category come back, biggest first and capped", a
   // `QUUX 2` would be one merchant.
   const others = ["ALFA", "BRAVO", "CHARLIE", "DELTA", "ECHO", "FOXTROT", "GOLF", "HOTEL"];
   others.forEach((name, i) => transactions.push(unknownTx(`x${i}`, `QUUX ${name} SUPPLY`, -1)));
-  writeFileSync(
-    join(statements, "omakei-ledger.json"),
-    JSON.stringify({ version: 1, rules: [], transactions }),
-  );
+  await writeDb(statements, { version: 1, rules: [], transactions });
 
   const { uncategorized } = await readLedgerForWidget("", envFor(home));
   assert.equal(uncategorized.total, 10, "ZORP, PORCH SUPPLY, and eight QUUX; the coffee row is out");
   assert.equal(uncategorized.merchants.length, 6, "the popup is a glance, not the rules table");
   assert.deepEqual(uncategorized.merchants[0], { merchant: "PORCH SUPPLY", count: 1, total: -80 });
   assert.deepEqual(uncategorized.merchants[1], { merchant: "ZORP WIDGETS", count: 2, total: -42.5 });
-});
-
-test("a ledger that will not parse still carries an empty merchant list", async () => {
-  const { home, statements } = attachedHome();
-  writeFileSync(join(statements, "omakei-ledger.json"), "not json at all");
-  const out = await readLedgerForWidget("", envFor(home));
-  assert.deepEqual(out.uncategorized, NOTHING_UNCATEGORIZED);
-});
-
-/* ------------------------------------------------------------ the database */
-
-const writeDb = (dir, ledger) => updateLedgerDb(dir, () => ledger);
-
-test("the database in the attached folder is the ledger, over a JSON beside it", async () => {
-  const { home, statements } = attachedHome();
-  await writeDb(statements, LEDGER);
-  writeFileSync(
-    join(statements, "omakei-ledger.json"),
-    JSON.stringify({ version: 1, rules: [], transactions: [{ id: "stale" }, { id: "older" }] }),
-  );
-  const { ledger, path } = await readLedgerForWidget("", envFor(home));
-  assert.equal(path, join(statements, "omakei-ledger.sqlite"));
-  assert.deepEqual(ledger.transactions.map((t) => t.id), ["a"]);
-});
-
-test("the widget never creates the database, even beside a JSON ledger", async () => {
-  const { home, statements } = attachedHome();
-  writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify(LEDGER));
-  await readLedgerForWidget("", envFor(home));
-  assert.deepEqual(readdirSync(statements), ["omakei-ledger.json"]);
-});
-
-test("a refused database does not fall back to the JSON beside it", async () => {
-  const { root, home, statements } = attachedHome();
-  const elsewhere = join(root, "elsewhere");
-  mkdirSync(elsewhere);
-  await writeDb(elsewhere, LEDGER);
-  symlinkSync(join(elsewhere, "omakei-ledger.sqlite"), join(statements, "omakei-ledger.sqlite"));
-  writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify(LEDGER));
-  const out = await readLedgerForWidget("", envFor(home));
-  assert.equal(out.ledger, null);
-  assert.equal(out.path, join(statements, "omakei-ledger.sqlite"));
-});
-
-test("an override naming a database reads that folder's database", async () => {
-  const { root, home } = attachedHome();
-  const elsewhere = join(root, "elsewhere");
-  mkdirSync(elsewhere);
-  await writeDb(elsewhere, { version: 1, rules: [], transactions: [{ id: "b" }, { id: "c" }] });
-  const { ledger } = await readLedgerForWidget(join(elsewhere, "omakei-ledger.sqlite"), envFor(home));
-  assert.equal(ledger.transactions.length, 2);
-});
-
-test("the CLI prints the database's ledger as JSON", async () => {
-  const { home, statements } = attachedHome();
-  await writeDb(statements, LEDGER);
-  const out = execFileSync("node", ["scripts/omakei-read-ledger.mjs"], {
-    encoding: "utf8",
-    env: { ...process.env, HOME: home, XDG_STATE_HOME: join(home, ".local", "state") },
-  });
-  const parsed = JSON.parse(out);
-  assert.equal(parsed.path, join(statements, "omakei-ledger.sqlite"));
-  assert.equal(parsed.ledger.transactions[0].id, "a");
 });

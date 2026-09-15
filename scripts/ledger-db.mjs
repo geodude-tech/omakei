@@ -12,33 +12,13 @@
  * `transactions`, `rules`, `setAsides`, …). This module converts at the edge, so
  * the editor, the widget, and `Model.js` do not know the storage changed.
  *
- * The JSON is never written here. When a folder has a JSON ledger and no
- * database, the JSON is read once and imported; the file is left exactly as it
- * was, which is also the rollback.
- *
  * Built-in `node:sqlite` only: installers never run `npm install`.
  */
 import { DatabaseSync } from "node:sqlite";
-import {
-  chmodSync,
-  closeSync,
-  constants as FS,
-  fstatSync,
-  linkSync,
-  lstatSync,
-  openSync,
-  unlinkSync,
-} from "node:fs";
+import { chmodSync, lstatSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import {
-  DB_FILENAME,
-  LEDGER_FILENAME,
-  MAX_LEDGER_BYTES,
-  isLedgerPayload,
-  ledgerEtag,
-  readCapped,
-} from "./ledger-api.mjs";
+import { DB_FILENAME, MAX_LEDGER_BYTES, isLedgerPayload } from "./ledger-api.mjs";
 import { CATEGORIES, TRANSFER_CATEGORY } from "../src/lib/finance/categories.ts";
 
 export { DB_FILENAME };
@@ -46,9 +26,6 @@ export const SCHEMA_VERSION = 2;
 
 /** How long a write waits on another process's lock before giving up. Writes take milliseconds. */
 const BUSY_TIMEOUT_MS = 5000;
-
-/** The files SQLite may keep beside the database. Any of them could be a planted symlink. */
-const SIDECARS = ["-journal", "-wal", "-shm"];
 
 const TX_COLUMNS = [
   "id",
@@ -165,116 +142,53 @@ export class LedgerShapeError extends Error {}
 /* ------------------------------------------------------------------- open */
 
 /**
- * What sits at `name` in the directory behind `at`, without following it.
- * `"missing"`, `"refused"`, or the fstat of a regular file within the cap.
+ * What sits where the database goes, without following it: `"missing"`,
+ * `"present"`, or `"refused"` for a symlink, anything but a regular file, or a
+ * file over the cap.
+ *
+ * SQLite opens by pathname and follows a symlink, and `node:sqlite` has no
+ * `SQLITE_OPEN_NOFOLLOW`, so a link in place of the ledger is refused here
+ * before SQLite sees it. The folder is the user's own: this keeps a stray link
+ * from turning some other file into the ledger. It does not try to win a race
+ * against something swapping files in that folder while it is being opened.
  */
-function inspect(at, name) {
-  let fd;
+function inspectDb(path) {
+  let info;
   try {
-    fd = openSync(`${at}/${name}`, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
+    info = lstatSync(path);
   } catch (err) {
     return err?.code === "ENOENT" ? "missing" : "refused";
   }
-  try {
-    const info = fstatSync(fd);
-    if (!info.isFile() || info.size > MAX_LEDGER_BYTES) return "refused";
-    return info;
-  } finally {
-    closeSync(fd);
-  }
-}
-
-/** Sidecars may be absent; if present they must be plain files, never links. */
-function sidecarsAreSafe(at, name) {
-  for (const suffix of SIDECARS) {
-    try {
-      if (!lstatSync(`${at}/${name}${suffix}`).isFile()) return false;
-    } catch (err) {
-      if (err?.code !== "ENOENT") return false;
-    }
-  }
-  return true;
+  return info.isFile() && info.size <= MAX_LEDGER_BYTES ? "present" : "refused";
 }
 
 /**
- * Open the database in `dir`, holding the same line `readCapped` does.
- *
- * SQLite opens by pathname and follows a symlink at the final component, and
- * `node:sqlite` has no `SQLITE_OPEN_NOFOLLOW`. So the file is inspected first
- * with `O_NOFOLLOW` (a regular file, within the cap), the sidecars are checked
- * for links, and after SQLite opens it the path is `lstat`ed again and must
- * still be the same inode. A swap between those steps is refused rather than
- * read.
- *
- * The directory descriptor is anchored the way `withDir` anchors every other
- * disk touch, and it stays open for as long as the connection does: SQLite
- * creates its journal by name mid-write, and that name has to keep resolving
- * into the directory that was checked.
- *
- * Returns `{ db, close }`, or null when there is no database (and `create` is
- * false) or what is there is refused.
+ * The database in `dir`, or null when there is none (and `create` is false) or
+ * what is there is refused.
  */
-function openDb(dir, { readOnly = false, create = false, name = DB_FILENAME } = {}) {
-  let dirFd;
-  try {
-    dirFd = openSync(dir, FS.O_RDONLY | FS.O_DIRECTORY);
-  } catch {
-    return null;
-  }
-  const at = `/proc/self/fd/${dirFd}`;
-  const release = () => {
-    try {
-      closeSync(dirFd);
-    } catch {
-      /* already closed */
-    }
-  };
-
-  const before = inspect(at, name);
-  if (before === "refused" || (before === "missing" && !create) || !sidecarsAreSafe(at, name)) {
-    release();
-    return null;
-  }
-
+function openDb(dir, { readOnly = false, create = false } = {}) {
+  const path = join(dir, DB_FILENAME);
+  const found = inspectDb(path);
+  if (found === "refused" || (found === "missing" && !create)) return null;
   let db;
   try {
-    db = new DatabaseSync(`${at}/${name}`, {
-      readOnly,
-      timeout: BUSY_TIMEOUT_MS,
-      allowExtension: false,
-    });
-    const now = lstatSync(`${at}/${name}`);
-    const same =
-      now.isFile() &&
-      (before === "missing" || (now.dev === before.dev && now.ino === before.ino));
-    if (!same) throw new Error("ledger database changed while it was being opened");
+    db = new DatabaseSync(path, { readOnly, timeout: BUSY_TIMEOUT_MS, allowExtension: false });
     // SQLite creates the file with the process umask (0644 here), where every
     // other file Omakei writes is 0600. It gives its journal the database's
     // mode, so setting it once on creation covers both.
-    if (before === "missing") chmodSync(`${at}/${name}`, 0o600);
+    if (found === "missing") chmodSync(path, 0o600);
     db.enableDefensive(true);
     db.exec("PRAGMA trusted_schema = OFF");
     if (!readOnly) db.exec("PRAGMA journal_mode = DELETE");
+    return db;
   } catch {
     try {
       db?.close();
     } catch {
       /* not open */
     }
-    release();
     return null;
   }
-
-  return {
-    db,
-    close() {
-      try {
-        db.close();
-      } finally {
-        release();
-      }
-    },
-  };
 }
 
 /* ----------------------------------------------------------------- schema */
@@ -436,141 +350,26 @@ function replaceSnapshot(db, ledger) {
   setMeta(db, "revision", (getMeta(db, "revision") ?? 0) + 1);
 }
 
-/* ------------------------------------------------------------------ import */
-
-/**
- * Build a database from the folder's JSON ledger, if it has one and no database.
- *
- * The JSON is only read, through `readCapped`. The database is built under a
- * random temp name in the same directory and published with `link`, which --
- * unlike `rename` -- refuses to replace a file that is already there: a second
- * process importing at the same moment cannot overwrite a database the first one
- * has already started writing to. The hash of the JSON imported is kept, so a
- * later change to that file can be noticed instead of silently ignored.
- *
- * Returns true if a database now exists that did not before.
- */
-export async function importJsonLedger(dir) {
-  // Every read and write calls this, so the common case -- a database is
-  // already there -- must cost a stat, not a parse of the JSON.
-  if (inspectPath(dir) !== "missing") return false;
-  const raw = await readCapped(join(dir, LEDGER_FILENAME), MAX_LEDGER_BYTES);
-  if (!raw) return false;
-  let parsed;
-  try {
-    parsed = JSON.parse(raw.toString("utf8"));
-  } catch {
-    return false;
-  }
-  if (!isLedgerPayload(parsed)) return false;
-
-  let dirFd;
-  try {
-    dirFd = openSync(dir, FS.O_RDONLY | FS.O_DIRECTORY);
-  } catch {
-    return false;
-  }
-  const at = `/proc/self/fd/${dirFd}`;
-  const tmpName = `.${DB_FILENAME}.${randomBytes(8).toString("hex")}.tmp`;
-  try {
-    const handle = openDb(dir, { create: true, name: tmpName });
-    if (!handle) return false;
-    try {
-      ensureSchema(handle.db);
-      handle.db.exec("BEGIN IMMEDIATE");
-      try {
-        replaceSnapshot(handle.db, parsed);
-        setMeta(handle.db, "importedFromEtag", ledgerEtag(raw));
-        setMeta(handle.db, "importedAt", Date.now());
-        handle.db.exec("COMMIT");
-      } catch (err) {
-        handle.db.exec("ROLLBACK");
-        throw err;
-      }
-    } finally {
-      handle.close();
-    }
-    try {
-      linkSync(`${at}/${tmpName}`, `${at}/${DB_FILENAME}`);
-      return true;
-    } catch (err) {
-      if (err?.code === "EEXIST") return false;
-      throw err;
-    }
-  } finally {
-    for (const suffix of ["", ...SIDECARS]) {
-      try {
-        unlinkSync(`${at}/${tmpName}${suffix}`);
-      } catch {
-        /* never created */
-      }
-    }
-    closeSync(dirFd);
-  }
-}
-
-/**
- * Whether the JSON ledger has changed since it was imported.
- *
- * After cutover nothing in this codebase writes the JSON, so a change means
- * something older still does -- an out-of-date checkout's categorize command,
- * say -- and those edits are not in the database. That is worth saying out
- * loud; it is not worth guessing which side is right, so nothing re-imports.
- */
-export async function jsonChangedSinceImport(dir) {
-  const handle = openDb(dir, { readOnly: true });
-  if (!handle) return false;
-  let imported;
-  try {
-    imported = getMeta(handle.db, "importedFromEtag");
-  } finally {
-    handle.close();
-  }
-  if (typeof imported !== "string") return false;
-  const raw = await readCapped(join(dir, LEDGER_FILENAME), MAX_LEDGER_BYTES);
-  return Boolean(raw) && ledgerEtag(raw) !== imported;
-}
-
 /* --------------------------------------------------------------------- api */
 
 /**
- * The ledger in `dir` and the etag of exactly that version.
- *
- * `importJson` lets a caller that owns the folder (the server, the categorize
- * command) turn a JSON-only folder into a database on first read. The widget's
- * reader passes false and gets `null` back instead, so it never writes.
+ * The ledger in `dir` and the etag of exactly that version. Never writes.
  *
  * `{ ledger: null, etag: "" }` when there is no database or nothing in it;
  * null when a database is there but refused (a link, too large, not ours).
  */
-export async function readLedgerDb(dir, { importJson = false } = {}) {
-  if (importJson) await importJsonLedger(dir);
-  const handle = openDb(dir, { readOnly: true });
-  if (!handle) {
-    return inspectPath(dir) === "missing" ? { ledger: null, etag: "" } : null;
+export async function readLedgerDb(dir) {
+  const db = openDb(dir, { readOnly: true });
+  if (!db) {
+    return inspectDb(join(dir, DB_FILENAME)) === "missing" ? { ledger: null, etag: "" } : null;
   }
   try {
-    if (!isOurs(handle.db)) return null;
-    return { ledger: readSnapshot(handle.db), etag: etagOf(handle.db) };
+    if (!isOurs(db)) return null;
+    return { ledger: readSnapshot(db), etag: etagOf(db) };
   } catch {
     return null;
   } finally {
-    handle.close();
-  }
-}
-
-function inspectPath(dir) {
-  let dirFd;
-  try {
-    dirFd = openSync(dir, FS.O_RDONLY | FS.O_DIRECTORY);
-  } catch {
-    return "missing";
-  }
-  try {
-    const found = inspect(`/proc/self/fd/${dirFd}`, DB_FILENAME);
-    return typeof found === "string" ? found : "present";
-  } finally {
-    closeSync(dirFd);
+    db.close();
   }
 }
 
@@ -590,16 +389,14 @@ function inspectPath(dir) {
  * stored, and resolves null when the database is refused.
  */
 export async function updateLedgerDb(dir, decide, { create = true } = {}) {
-  await importJsonLedger(dir);
-  const handle = openDb(dir, { create });
-  if (!handle) return null;
+  const db = openDb(dir, { create });
+  if (!db) return null;
   try {
     // Only a database with nothing in it yet is given the schema. Adding tables
     // to some other SQLite file would quietly adopt it as the ledger.
-    const empty = handle.db.prepare("SELECT count(*) AS n FROM sqlite_master").get().n === 0;
-    if (empty) ensureSchema(handle.db);
-    if (!isOurs(handle.db)) return null;
-    const { db } = handle;
+    const empty = db.prepare("SELECT count(*) AS n FROM sqlite_master").get().n === 0;
+    if (empty) ensureSchema(db);
+    if (!isOurs(db)) return null;
     db.exec("BEGIN IMMEDIATE");
     try {
       const etag = etagOf(db);
@@ -626,6 +423,6 @@ export async function updateLedgerDb(dir, decide, { create = true } = {}) {
       throw err;
     }
   } finally {
-    handle.close();
+    db.close();
   }
 }

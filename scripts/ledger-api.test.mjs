@@ -10,7 +10,6 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
-  statSync,
   symlinkSync,
   truncateSync,
   writeFileSync,
@@ -156,7 +155,6 @@ test("attaching a folder makes the ledger readable, writable, and findable", asy
     assert.equal(put.status, 200);
     const { ledger: onDisk } = await readLedgerDb(statements);
     assert.equal(onDisk.transactions[0].id, "a");
-    assert.equal(existsSync(join(statements, "omakei-ledger.json")), false, "the JSON is not written");
 
     // And comes straight back on the next open.
     state = await (await s.call("/state")).json();
@@ -269,7 +267,6 @@ test("a malformed ledger never reaches disk", async () => {
       });
       assert.equal(res.status, 400);
     }
-    assert.throws(() => readFileSync(join(statements, "omakei-ledger.json")));
     assert.equal(existsSync(join(statements, "omakei-ledger.sqlite")), false);
   } finally {
     await s.close();
@@ -472,11 +469,12 @@ async function attached(home, statements) {
 
 test("a symlink in place of the ledger is not followed", async () => {
   const { root, home, statements } = tempTree();
-  const secret = join(root, "secret.json");
-  writeFileSync(secret, JSON.stringify({ version: 1, transactions: [{ id: "leaked" }], rules: [] }));
+  const secret = join(root, "secret");
+  mkdirSync(secret);
+  await updateLedgerDb(secret, () => ({ version: 1, transactions: [{ id: "leaked" }], rules: [] }));
   const s = await attached(home, statements);
   try {
-    symlinkSync(secret, join(statements, "omakei-ledger.json"));
+    symlinkSync(join(secret, "omakei-ledger.sqlite"), join(statements, "omakei-ledger.sqlite"));
     const state = await (await s.call("/state")).json();
     assert.equal(state.ledger, null, "a symlinked ledger must read as no ledger at all");
   } finally {
@@ -488,13 +486,9 @@ test("a ledger larger than the cap never enters the server", async () => {
   const { home, statements } = tempTree();
   const s = await attached(home, statements);
   try {
-    // Deliberately *valid* JSON above the cap. A sparse file would be rejected
-    // for being unparseable and would prove nothing about the size limit.
-    const filler = "x".repeat(1024);
-    const transactions = Array.from({ length: 21 * 1024 }, (_, i) => ({ id: `t${i}`, note: filler }));
-    const path = join(statements, "omakei-ledger.json");
-    writeFileSync(path, JSON.stringify({ version: 1, transactions, rules: [] }));
-    assert.ok(statSync(path).size > 20 * 1024 * 1024, "fixture must exceed the cap");
+    await updateLedgerDb(statements, () => ({ version: 1, transactions: [{ id: "a" }], rules: [] }));
+    const path = join(statements, "omakei-ledger.sqlite");
+    truncateSync(path, 20 * 1024 * 1024 + 1);
     const state = await (await s.call("/state")).json();
     assert.equal(state.ledger, null, "an oversized ledger is refused, not parsed");
   } finally {
@@ -855,7 +849,6 @@ test("a save with no If-Match at all is refused", async () => {
       body: JSON.stringify({ version: 1, transactions: [], rules: [], selectedMonth: "2026-08" }),
     });
     assert.equal(res.status, 428, "a blind write is the bug; there is no opting out of the check");
-    assert.equal(existsSync(join(statements, "omakei-ledger.json")), false);
     assert.equal(existsSync(join(statements, "omakei-ledger.sqlite")), false);
   } finally {
     await s.close();
@@ -897,38 +890,6 @@ test("two saves racing on the same version cannot both land", async () => {
 
     const codes = [a.status, b.status].sort();
     assert.deepEqual(codes, [200, 412], "exactly one wins");
-  } finally {
-    await s.close();
-  }
-});
-
-/* ------------------------------------------------------ the JSON ledger */
-
-test("a folder with only a JSON ledger is imported on first read, and the JSON is left exactly as it was", async () => {
-  const { home, statements } = tempTree();
-  const jsonPath = join(statements, "omakei-ledger.json");
-  const text = `${JSON.stringify({
-    version: 1,
-    savedAt: "2026-08-27T00:00:00.000Z",
-    selectedMonth: "2026-08",
-    transactions: [{ id: "a", date: "2026-08-02", amount: -4.5 }],
-    rules: [],
-    setAsides: [],
-  })}\n`;
-  writeFileSync(jsonPath, text);
-  const mtime = statSync(jsonPath).mtimeMs;
-  const s = await attached(home, statements);
-  try {
-    const state = await (await s.call("/state")).json();
-    assert.equal(state.ledger.transactions[0].id, "a");
-    assert.notEqual(state.ledgerEtag, "", "the imported ledger is a real version to write against");
-
-    const put = await putLedger(s, { ...state.ledger, selectedMonth: "2026-09" }, state.ledgerEtag);
-    assert.equal(put.status, 200);
-    assert.equal((await readLedgerDb(statements)).ledger.selectedMonth, "2026-09");
-
-    assert.equal(readFileSync(jsonPath, "utf8"), text, "the JSON is never written");
-    assert.equal(statSync(jsonPath).mtimeMs, mtime);
   } finally {
     await s.close();
   }

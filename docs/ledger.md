@@ -21,11 +21,9 @@ Read `ledgerPath` from there rather than guessing. If the file is missing, no
 folder has been attached yet and there is no ledger to read — say so instead of
 searching the disk for one.
 
-`ledgerPath` still ending in `omakei-ledger.json` means the editor has not run
-since Omakei moved the ledger to SQLite. That JSON is the ledger as it was then;
-opening the editor imports it, and from then on it is never written again. A
-`omakei-ledger.json` sitting next to `omakei-ledger.sqlite` is that leftover —
-do not read it.
+An `omakei-ledger.json` sitting next to `omakei-ledger.sqlite` is left over
+from before Omakei moved the ledger to SQLite. Nothing reads or writes it — do
+not read it either.
 
 ## What is in it
 

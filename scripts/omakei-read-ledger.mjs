@@ -33,14 +33,11 @@
  *
  * The override is the widget's `ledgerPath` setting, for a ledger kept
  * somewhere the editor did not put it. Empty or absent means "ask the state
- * file", which is the normal case. An override naming `omakei-ledger.sqlite`
- * reads that folder's database; any other path is read as a JSON ledger, which
- * is what the setting always pointed at before.
+ * file", which is the normal case. The override names either
+ * `omakei-ledger.sqlite` or the folder that holds it.
  *
- * The ledger is `omakei-ledger.sqlite`, opened read-only. A folder that has not
- * been imported yet -- only `omakei-ledger.json` in it, because no server or
- * categorize command has run since the upgrade -- is read from the JSON so the
- * bar keeps working. This never imports: the widget does not write.
+ * The ledger is `omakei-ledger.sqlite`, opened read-only: the widget does not
+ * write.
  *
  * Always exits 0 and always prints valid JSON. The widget has no way to show an
  * error, and a bar that reads `null` and renders empty is the correct outcome
@@ -50,11 +47,8 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
   DB_FILENAME,
-  LEDGER_FILENAME,
-  MAX_LEDGER_BYTES,
   MAX_STATE_BYTES,
   expandHome,
-  isLedgerPayload,
   parseStateFile,
   readCapped,
   stateDirFor,
@@ -86,54 +80,26 @@ function uncategorizedFor(ledger) {
   }
 }
 
-/** A folder whose database to read, or a JSON file to read directly. */
-async function resolveLedger(override, env, home) {
+/** The folder whose database to read. */
+async function resolveDir(override, env, home) {
   const wanted = expandHome(override, home);
-  if (wanted) {
-    return basename(wanted) === DB_FILENAME ? { dir: dirname(wanted) } : { jsonPath: wanted };
-  }
+  if (wanted) return basename(wanted) === DB_FILENAME ? dirname(wanted) : wanted;
   const raw = await readCapped(join(stateDirFor(env, home), "state.json"), MAX_STATE_BYTES);
   if (!raw) return null;
-  const state = parseStateFile(raw.toString("utf8"));
-  return state ? { dir: state.statementsDir } : null;
+  return parseStateFile(raw.toString("utf8"))?.statementsDir ?? null;
 }
 
 /** `env` and `home` are parameters for the same reason they are in
  *  `createLedgerApi`: the state file's location depends on both, and a test
  *  that cannot move them ends up reading the real one. */
 export async function readLedgerForWidget(override = "", { env = process.env, home = homedir() } = {}) {
-  const target = await resolveLedger(override, env, home);
-  if (!target) return { path: "", ledger: null, uncategorized: NOTHING };
-  if (target.jsonPath) return readJsonLedger(target.jsonPath);
-
-  const dbPath = join(target.dir, DB_FILENAME);
-  const found = await readLedgerDb(target.dir);
-  // A database that is there but refused is not a reason to fall back to the
-  // JSON beside it: that file stopped being the ledger when it was imported,
-  // and showing it would show numbers from before every edit since.
-  if (!found) return { path: dbPath, ledger: null, uncategorized: NOTHING };
-  if (found.ledger) return { path: dbPath, ledger: found.ledger, uncategorized: uncategorizedFor(found.ledger) };
-  if (found.etag === "") {
-    const legacy = await readJsonLedger(join(target.dir, LEDGER_FILENAME));
-    if (legacy.ledger) return legacy;
-  }
-  return { path: dbPath, ledger: null, uncategorized: NOTHING };
-}
-
-async function readJsonLedger(path) {
-  const raw = await readCapped(path, MAX_LEDGER_BYTES);
+  const dir = await resolveDir(override, env, home);
+  if (!dir) return { path: "", ledger: null, uncategorized: NOTHING };
   // The path is reported even when the read fails: "there should be a ledger
   // here and there is not" is exactly what the panel's empty state says.
-  if (!raw) return { path, ledger: null, uncategorized: NOTHING };
-  let ledger = null;
-  try {
-    const parsed = JSON.parse(raw.toString("utf8"));
-    ledger = isLedgerPayload(parsed) ? parsed : null;
-  } catch {
-    return { path, ledger: null, uncategorized: NOTHING };
-  }
-  // Outside the parse guard on purpose: grouping the merchants must never be
-  // able to turn a ledger that parsed into one the widget is told is missing.
+  const path = join(dir, DB_FILENAME);
+  const found = await readLedgerDb(dir);
+  const ledger = found?.ledger ?? null;
   return { path, ledger, uncategorized: uncategorizedFor(ledger) };
 }
 
