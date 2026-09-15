@@ -41,6 +41,11 @@ code, so a renamed category fails `npm test` rather than misleading an agent.
 That test is what keeps the doc true, and the category table it defines is not
 duplicated anywhere else.
 
+`docs/runbooks/categorize-with-an-agent.md` is the write-side companion: the
+procedure an agent follows to clear the uncategorized list through
+`omakei-categorize.mjs`. Its examples are invented on purpose — it lives in a
+public repository and must never quote a real ledger.
+
 ## Panels
 
 Each card on the dashboard is a panel in `src/panels/`, discovered by a glob in

@@ -184,7 +184,7 @@ bar watches. That last step is why the popup updates without opening the editor.
 ### Checks are never a rule
 
 A paper check's bank line is just `CHECK` (or `CHECK 1042`), so one key covers
-the nanny, a contractor, and a birthday present. A rule on it would give every
+a contractor, a school fundraiser, and a birthday present. A rule on it would give every
 future check the last one's category. So:
 
 - `omakei-categorize.mjs CHECK childcare` writes **no rule**. It pins the checks
@@ -206,6 +206,13 @@ vanished silently. A save now carries the version it was derived from and is
 refused if the file has moved on, and this tool re-checks immediately before
 writing and retries if it lost. The open tab picks the change up on its next
 save; reload it to see the new rules sooner.
+
+## Categorizing a whole backlog
+
+`docs/runbooks/categorize-with-an-agent.md` is the procedure built on the tool
+above: how to triage the uncategorized list, what to ask the user instead of
+guessing, when a rule is the wrong tool, and how to check that nothing was
+miscounted afterwards.
 
 ## Pinning the answer
 

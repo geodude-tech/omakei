@@ -70,7 +70,7 @@ const GENERIC = /^(check|chk)( \d+)?$/;
 /**
  * A merchant key that names a payment method rather than a payee. A paper
  * check's bank line is just "CHECK" (maybe with a number), so the same key
- * covers the nanny, a contractor, and a birthday gift. A rule on it would give
+ * covers a contractor, a school fundraiser, and a birthday gift. A rule on it would give
  * every future check whatever the last one was, so these are never written as
  * rules: each transaction is categorized by hand and pinned instead.
  */
