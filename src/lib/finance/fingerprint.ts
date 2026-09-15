@@ -65,6 +65,19 @@ export function extractMerchant(description: string): string {
   return tokens.slice(0, 2).join(" ");
 }
 
+const GENERIC = /^(check|chk)( \d+)?$/;
+
+/**
+ * A merchant key that names a payment method rather than a payee. A paper
+ * check's bank line is just "CHECK" (maybe with a number), so the same key
+ * covers a contractor, a school fundraiser, and a birthday gift. A rule on it would give
+ * every future check whatever the last one was, so these are never written as
+ * rules: each transaction is categorized by hand and pinned instead.
+ */
+export function isGenericMerchant(merchant: string): boolean {
+  return GENERIC.test(spacedForm(merchant));
+}
+
 export function fingerprint(
   date: string,
   amount: number,
@@ -179,4 +192,16 @@ export function ruleMatches(pattern: string, description: string): boolean {
   if (!compiled.tokenRe) return false;
   if (compiled.tokenRe.test(spacedDescription(description))) return true;
   return compactSpanMatch(pattern, description);
+}
+
+/**
+ * Whether a rule may categorize this transaction: `ruleMatches`, except that no
+ * rule ever applies to a bare check. Enforced here rather than where rules are
+ * written, because an agent can put a `check` (or `/.*\/`) rule straight into
+ * the ledger, and it must still categorize no check. Every place a rule decides
+ * a category — the rule lookup and the transfer locks — asks this.
+ */
+export function ruleApplies(pattern: string, description: string): boolean {
+  if (GENERIC.test(spacedDescription(description))) return false;
+  return ruleMatches(pattern, description);
 }

@@ -23,7 +23,10 @@ Two things have to be true:
   reading, closed for writing.
 
 What this is **not**: no ML, no model call, no classifier training, no
-per-transaction tags beyond the one category. The taxonomy is fixed — 20
+per-transaction tags beyond the one category. The one per-transaction state is
+a pin (`pinnedCategoryId`): a category chosen by hand for a single row, used for
+checks, whose bare `CHECK` line no rule may match (`ruleApplies` in
+`fingerprint.ts`). The taxonomy is fixed — 20
 categories, 4 groups — and this spec keeps it fixed.
 
 **Relationship to `statement-import.md`:** that spec owns the parse → row → dedupe

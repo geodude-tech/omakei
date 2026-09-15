@@ -1,5 +1,11 @@
 import { CATEGORIES, defaultRules, TRANSFER_CATEGORY } from "./categories.ts";
-import { fingerprint, identifierLength, ruleMatches } from "./fingerprint.ts";
+import {
+  extractMerchant,
+  fingerprint,
+  identifierLength,
+  isGenericMerchant,
+  ruleApplies,
+} from "./fingerprint.ts";
 import {
   applyTransferCategories,
   isInternalTransfer,
@@ -22,7 +28,7 @@ function bestMatchingRule(
   let bestLen = -1;
   for (const rule of rules) {
     if (rule.source !== source) continue;
-    if (!ruleMatches(rule.pattern, description)) continue;
+    if (!ruleApplies(rule.pattern, description)) continue;
     const len = identifierLength(rule.pattern);
     if (
       !best ||
@@ -54,17 +60,57 @@ export function assignCategory(
   return bestMatchingRule(description, rules, "default")?.categoryId ?? null;
 }
 
-/** Recompute categories from rules + transfer/mortgage logic. Fixes stale transfer tags on load. */
+/**
+ * Recompute categories from rules + transfer/mortgage logic. Fixes stale
+ * transfer tags on load. A pinned row keeps its pin, whatever the rules say.
+ */
 export function refreshCategories(
   transactions: Transaction[],
   rules: CategorizeRule[],
 ): Transaction[] {
   const assigned = transactions.map((tx) => ({
     ...tx,
-    categoryId: assignCategory(tx.description, rules, tx.accountKind, tx.amount),
+    categoryId:
+      tx.pinnedCategoryId ??
+      assignCategory(tx.description, rules, tx.accountKind, tx.amount),
   }));
   return applyTransferCategories(assigned, rules);
 }
+
+/** Categorize these transactions by hand. A pin outlives every re-derive. */
+export function pinCategory(
+  transactions: Transaction[],
+  ids: ReadonlySet<string>,
+  categoryId: string,
+): Transaction[] {
+  return transactions.map((tx) =>
+    ids.has(tx.id) ? { ...tx, pinnedCategoryId: categoryId, categoryId } : tx,
+  );
+}
+
+/**
+ * The rows a merchant-level "categorize" pins when the merchant is too generic
+ * for a rule: those under that key with no category yet. Rows already
+ * categorized — last month's check — keep what they were given.
+ */
+export function uncategorizedIdsFor(
+  transactions: Transaction[],
+  merchant: string,
+): Set<string> {
+  const key = merchant.trim().toLowerCase();
+  return new Set(
+    transactions
+      .filter(
+        (tx) =>
+          !tx.categoryId &&
+          typeof tx.description === "string" &&
+          extractMerchant(tx.description).toLowerCase() === key,
+      )
+      .map((tx) => tx.id),
+  );
+}
+
+export { isGenericMerchant };
 
 export function mergeImport(
   existing: Transaction[],

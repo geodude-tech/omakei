@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   assignCategory,
+  isGenericMerchant,
+  pinCategory,
   refreshCategories,
+  uncategorizedIdsFor,
   seedRules,
   upsertRule,
 } from "./ledger.ts";
@@ -184,4 +187,72 @@ test("refreshCategories: running twice on derived rows changes nothing", () => {
     twice.map((t) => t.categoryId),
     once.map((t) => t.categoryId),
   );
+});
+
+/* ------------------------------------------------------------ pinned checks */
+
+test("refreshCategories: a pin survives re-derive and beats a matching rule", () => {
+  const rows = [
+    tx({ id: "p", description: "ZORP WIDGETS 5567", amount: -12, pinnedCategoryId: "childcare" }),
+  ];
+  const out = refreshCategories(rows, [userRule("zorp widgets", "shopping"), ...defaults()]);
+  assert.equal(out[0]!.categoryId, "childcare");
+  assert.equal(refreshCategories(out, defaults())[0]!.categoryId, "childcare");
+});
+
+test("a rule never categorizes a check, however it got into the ledger", () => {
+  const rules = [userRule("check", "childcare"), userRule("/.*/", "shopping"), ...defaults()];
+  for (const description of ["CHECK", "Check 1042", "CHECK #1042", "CHK 88"]) {
+    assert.equal(assignCategory(description, rules, "checking", -2500), null, description);
+  }
+  // The same rules still apply to anything that is not a bare check.
+  assert.equal(assignCategory("QQQ UNKNOWN VENDOR 90", rules, "checking", -9), "shopping");
+});
+
+test("pinCategory: pins only the named rows; a new check after it stays uncategorized", () => {
+  const rows = [
+    tx({ id: "c1", description: "CHECK", amount: -2380.26 }),
+    tx({ id: "c2", description: "CHECK", amount: -2496.62, date: "2026-07-27" }),
+    tx({ id: "x", description: "QQQ UNKNOWN VENDOR 90", amount: -5 }),
+  ];
+  const ids = uncategorizedIdsFor(rows, "CHECK");
+  assert.deepEqual([...ids].sort(), ["c1", "c2"]);
+
+  const pinned = refreshCategories(pinCategory(rows, ids, "childcare"), defaults());
+  const next = refreshCategories(
+    [...pinned, tx({ id: "c3", description: "CHECK", amount: -3144.13, date: "2026-09-03" })],
+    defaults(),
+  );
+  const byId = Object.fromEntries(next.map((t) => [t.id, t.categoryId]));
+  assert.deepEqual(byId, { c1: "childcare", c2: "childcare", x: null, c3: null });
+  assert.deepEqual([...uncategorizedIdsFor(next, "CHECK")], ["c3"]);
+});
+
+test("transfer pairing leaves a pinned check alone", () => {
+  const rows = [
+    tx({
+      id: "chk",
+      description: "CHECK",
+      amount: -2599.93,
+      date: "2026-06-05",
+      pinnedCategoryId: "childcare",
+    }),
+    tx({ id: "mtg", description: "Mail", amount: -2599.93, date: "2026-06-04", accountKind: "mortgage" }),
+  ];
+  const byId = Object.fromEntries(
+    refreshCategories(rows, defaults()).map((t) => [t.id, t.categoryId]),
+  );
+  assert.equal(byId.chk, "childcare");
+  assert.equal(byId.mtg, "housing");
+
+  // Unpinned, the same check pairs with the mortgage payment as before.
+  const unpinned = rows.map((t) => ({ ...t, pinnedCategoryId: undefined }));
+  assert.equal(refreshCategories(unpinned, defaults())[0]!.categoryId, "transfers");
+});
+
+test("isGenericMerchant: checks only", () => {
+  assert.equal(isGenericMerchant("CHECK"), true);
+  assert.equal(isGenericMerchant("check 1042"), true);
+  assert.equal(isGenericMerchant("CHECKERS"), false);
+  assert.equal(isGenericMerchant("SAFEWAY"), false);
 });

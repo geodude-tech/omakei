@@ -3,6 +3,7 @@ import { CategorySelect } from "@/components/omakei/category-select";
 import { Pager } from "@/components/omakei/pager";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { categoryName } from "@/lib/finance/categories";
+import { isGenericMerchant } from "@/lib/finance/fingerprint";
 import { saveLedgerNow } from "@/lib/finance/ledger-file";
 import { useLedgerStore } from "@/lib/finance/store";
 import { formatMoney } from "@/lib/utils";
@@ -50,7 +51,11 @@ export function NeedsCategoryPanel({
               onChange={(id) => {
                 categorizeMerchant(m.merchant, id);
                 void saveLedgerNow(useLedgerStore.getState());
-                toast.success(`Always categorize “${m.merchant}” as ${categoryName(id)}`);
+                toast.success(
+                  isGenericMerchant(m.merchant)
+                    ? `Set ${m.count} as ${categoryName(id)} — the next “${m.merchant}” will ask again`
+                    : `Always categorize “${m.merchant}” as ${categoryName(id)}`,
+                );
               }}
               placeholder="Assign"
               size="sm"

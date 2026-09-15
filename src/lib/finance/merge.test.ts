@@ -106,3 +106,17 @@ test("only user rules are merged; the shipped defaults are never persisted", () 
   const merged = mergeSnapshots(snapshot(), theirs);
   assert.deepEqual(merged.rules, []);
 });
+
+test("a pin the CLI wrote while this tab was open survives our save", () => {
+  const theirs = snapshot({
+    transactions: [
+      tx({ id: "c1", description: "CHECK", pinnedCategoryId: "childcare", categoryId: "childcare" }),
+    ],
+  });
+  const mine = snapshot({ transactions: [tx({ id: "c1", description: "CHECK" })] });
+
+  const merged = mergeSnapshots(mine, theirs);
+
+  assert.equal(merged.transactions[0]!.pinnedCategoryId, "childcare");
+  assert.equal(merged.transactions[0]!.categoryId, "childcare");
+});

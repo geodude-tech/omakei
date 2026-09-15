@@ -44,6 +44,7 @@ Transaction {
   fingerprint: string;      // dedupe key across re-imports
   categoryId: string | null;// null means nothing categorized it
   importedAt: number;
+  pinnedCategoryId?: string;// set by hand for this one transaction; see below
 }
 
 SetAside { id: string; name: string; amount: number }
@@ -133,6 +134,10 @@ build, so replaying `rules` against `description` will not reproduce the
 categories already on the transactions. Trust `categoryId`; treat `rules` as a
 record of the user's manual overrides.
 
+The other kind of manual override is a **pin**: `pinnedCategoryId` on a single
+transaction, which wins over every rule and keeps the row out of transfer
+pairing. Pins exist for checks, and for them alone in practice: see below.
+
 ## A worked month
 
 Against a synthetic eight-month ledger (236 transactions, one credit-card
@@ -158,6 +163,7 @@ scripts/omakei-categorize.mjs --remove <pattern>        drop a rule
 scripts/omakei-categorize.mjs --list                    merchants with no category yet
 scripts/omakei-categorize.mjs --list --json             the same list, as JSON
 scripts/omakei-categorize.mjs --dry-run <pattern> <id>  show the effect, write nothing
+scripts/omakei-categorize.mjs --pin <tx-id> <category>  categorize one transaction by hand
 ```
 
 A `<pattern>` is a key identifier (`safeway`), not the whole bank line, matched
@@ -175,9 +181,24 @@ persist — the defaults ship in the build), re-derives every transaction's
 `categoryId` with the same engine the app uses, and bumps the revision file the
 bar watches. That last step is why the popup updates without opening the editor.
 
-**Do not hand-edit a `categoryId` without a rule behind it.** The app re-derives
+### Checks are never a rule
+
+A paper check's bank line is just `CHECK` (or `CHECK 1042`), so one key covers
+a contractor, a school fundraiser, and a birthday present. A rule on it would give every
+future check the last one's category. So:
+
+- `omakei-categorize.mjs CHECK childcare` writes **no rule**. It pins the checks
+  that have no category yet, and next month's check arrives uncategorized.
+- When the outstanding checks paid different people, pin each by its `id`:
+  `omakei-categorize.mjs --pin <id> <category>`.
+- A `check` rule written into the ledger by any other route matches nothing.
+  The engine refuses to apply any rule, `/.*/` included, to a bare check, so
+  the next re-derive puts those rows back to `null` (or their pin).
+
+**Do not hand-edit a `categoryId` without a rule or a pin behind it.** The app re-derives
 on every load and every folder sync (`refreshCategories`), so an unbacked
-category is overwritten on the next one. Change categories by changing rules.
+category is overwritten on the next one. Change categories by changing rules —
+or, for one transaction, with `--pin`.
 
 **Safe to run with the editor open.** It used to not be: an open tab held the
 ledger in memory and reinstated it on its next save, so a rule written here
@@ -185,6 +206,13 @@ vanished silently. A save now carries the version it was derived from and is
 refused if the file has moved on, and this tool re-checks immediately before
 writing and retries if it lost. The open tab picks the change up on its next
 save; reload it to see the new rules sooner.
+
+## Categorizing a whole backlog
+
+`docs/runbooks/categorize-with-an-agent.md` is the procedure built on the tool
+above: how to triage the uncategorized list, what to ask the user instead of
+guessing, when a rule is the wrong tool, and how to check that nothing was
+miscounted afterwards.
 
 ## Pinning the answer
 

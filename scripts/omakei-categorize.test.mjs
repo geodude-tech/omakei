@@ -190,3 +190,40 @@ test("no attached folder fails cleanly", () => {
   assert.equal(status, 1);
   assert.match(stderr, /No ledger found/);
 });
+
+test("CHECK <category> pins the outstanding checks and writes no rule", () => {
+  const { home, ledgerPath } = attachedLedger([
+    txOf("k1", "CHECK", -2380.26),
+    txOf("k2", "CHECK", -2496.62),
+    ...TX,
+  ]);
+  const { status, stdout } = cli(["CHECK", "childcare"], home);
+  assert.equal(status, 0);
+  assert.match(stdout, /Pinned 2 transactions → childcare \(no rule written\)/);
+
+  assert.deepEqual(readLedger(ledgerPath).rules, []);
+  const cats = categories(ledgerPath);
+  assert.equal(cats.k1, "childcare");
+  assert.equal(cats.k2, "childcare");
+  assert.equal(cats.b, null, "other merchants untouched");
+
+  // Another rule write re-derives everything; the pins hold, and there is
+  // nothing left under CHECK to pin.
+  cli(["zorp widgets", "shopping"], home);
+  assert.equal(categories(ledgerPath).k1, "childcare");
+  const again = cli(["CHECK", "childcare"], home);
+  assert.equal(again.status, 1);
+  assert.match(again.stderr, /Nothing under "CHECK" needs a category/);
+});
+
+test("--pin categorizes one transaction by id, and an unknown id writes nothing", () => {
+  const { home, ledgerPath } = attachedLedger([txOf("k1", "CHECK", -10), txOf("k2", "CHECK", -20)]);
+  assert.equal(cli(["--pin", "k2", "gifts"], home).status, 1, "unknown category refused");
+  assert.equal(cli(["--pin", "k2", "shopping"], home).status, 0);
+  assert.deepEqual(categories(ledgerPath), { k1: null, k2: "shopping" });
+
+  const before = readFileSync(ledgerPath, "utf8");
+  const missing = cli(["--pin", "nope", "shopping"], home);
+  assert.equal(missing.status, 1);
+  assert.equal(readFileSync(ledgerPath, "utf8"), before);
+});

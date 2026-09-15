@@ -12,8 +12,9 @@ import "Model.js" as Model
  * This is the one thing in the widget only the person can answer -- what is
  * `SQ *PORCH SUPPLY`? -- and the only thing the widget writes. It writes it the
  * way every Omarchy panel does: by running a CLI that already works from a
- * terminal. `omakei-categorize.mjs <merchant> <category>` writes the rule,
- * re-derives every transaction with the shipped engine, and bumps the revision
+ * terminal. `omakei-categorize.mjs <merchant> <category>` writes the rule
+ * (for `CHECK`, it pins the outstanding checks instead, so the next one asks
+ * again), re-derives every transaction with the shipped engine, and bumps the revision
  * file, so the row leaves on the read that follows.
  *
  * It lives in its own file because the queue, the failure state, and the

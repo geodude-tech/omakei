@@ -1,5 +1,5 @@
 import { HOUSING_CATEGORY, TRANSFER_CATEGORY } from "./categories.ts";
-import { ruleMatches } from "./fingerprint.ts";
+import { ruleApplies } from "./fingerprint.ts";
 import type { AccountKind, CategorizeRule, Transaction } from "./types.ts";
 
 const CARD_PAYMENT =
@@ -84,7 +84,12 @@ export function mortgageCategory(description: string): string | null {
 }
 
 function userLocked(description: string, rules: CategorizeRule[]): boolean {
-  return rules.some((r) => r.source === "user" && ruleMatches(r.pattern, description));
+  return rules.some((r) => r.source === "user" && ruleApplies(r.pattern, description));
+}
+
+/** The user decided this row's category, by a rule or by pinning it. */
+function locked(tx: Transaction, rules: CategorizeRule[]): boolean {
+  return Boolean(tx.pinnedCategoryId) || userLocked(tx.description, rules);
 }
 
 function sameCents(a: number, b: number): boolean {
@@ -141,14 +146,14 @@ export function pairInternalTransfers(
   const dests = transactions.filter((t) => isPairableCredit(t) || isPairableMortgagePayment(t));
 
   for (const src of sources) {
-    if (userLocked(src.description, rules)) continue;
+    if (locked(src, rules)) continue;
     const cents = Math.round(Math.abs(src.amount) * 100);
     if (cents < 100) continue;
     let best: Transaction | null = null;
     let bestDays = Infinity;
     for (const dest of dests) {
       if (used.has(dest.id) || dest.id === src.id) continue;
-      if (userLocked(dest.description, rules)) continue;
+      if (locked(dest, rules)) continue;
       if (!sameCents(src.amount, dest.amount)) continue;
       const days = daysApart(src.date, dest.date);
       if (days > 5) continue;
@@ -180,7 +185,7 @@ export function pairSameBankMoves(
 
   for (let i = 0; i < legs.length; i++) {
     const a = legs[i]!;
-    if (used.has(a.id) || userLocked(a.description, rules)) continue;
+    if (used.has(a.id) || locked(a, rules)) continue;
     const cents = Math.round(Math.abs(a.amount) * 100);
     if (cents < 100) continue;
     let best: Transaction | null = null;
@@ -188,7 +193,7 @@ export function pairSameBankMoves(
     for (let j = 0; j < legs.length; j++) {
       const b = legs[j]!;
       if (a.id === b.id || used.has(b.id)) continue;
-      if (userLocked(b.description, rules)) continue;
+      if (locked(b, rules)) continue;
       if (a.accountName === b.accountName) continue;
       if (Math.sign(a.amount) === Math.sign(b.amount)) continue;
       if (!sameCents(a.amount, b.amount)) continue;
@@ -214,7 +219,7 @@ export function applyTransferCategories(
   rules: CategorizeRule[],
 ): Transaction[] {
   const tagged = transactions.map((tx) => {
-    if (userLocked(tx.description, rules)) return tx;
+    if (locked(tx, rules)) return tx;
     if (isInternalTransfer(tx.description, tx.accountKind, tx.amount)) {
       return { ...tx, categoryId: TRANSFER_CATEGORY };
     }
