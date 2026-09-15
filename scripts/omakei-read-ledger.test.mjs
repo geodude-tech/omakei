@@ -4,12 +4,13 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { readLedgerForWidget } from "./omakei-read-ledger.mjs";
 import { renderStateFile } from "./ledger-api.mjs";
+import { updateLedgerDb } from "./ledger-db.mjs";
 
 const temps = [];
 after(() => {
@@ -182,4 +183,60 @@ test("a ledger that will not parse still carries an empty merchant list", async 
   writeFileSync(join(statements, "omakei-ledger.json"), "not json at all");
   const out = await readLedgerForWidget("", envFor(home));
   assert.deepEqual(out.uncategorized, NOTHING_UNCATEGORIZED);
+});
+
+/* ------------------------------------------------------------ the database */
+
+const writeDb = (dir, ledger) => updateLedgerDb(dir, () => ledger);
+
+test("the database in the attached folder is the ledger, over a JSON beside it", async () => {
+  const { home, statements } = attachedHome();
+  await writeDb(statements, LEDGER);
+  writeFileSync(
+    join(statements, "omakei-ledger.json"),
+    JSON.stringify({ version: 1, rules: [], transactions: [{ id: "stale" }, { id: "older" }] }),
+  );
+  const { ledger, path } = await readLedgerForWidget("", envFor(home));
+  assert.equal(path, join(statements, "omakei-ledger.sqlite"));
+  assert.deepEqual(ledger.transactions.map((t) => t.id), ["a"]);
+});
+
+test("the widget never creates the database, even beside a JSON ledger", async () => {
+  const { home, statements } = attachedHome();
+  writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify(LEDGER));
+  await readLedgerForWidget("", envFor(home));
+  assert.deepEqual(readdirSync(statements), ["omakei-ledger.json"]);
+});
+
+test("a refused database does not fall back to the JSON beside it", async () => {
+  const { root, home, statements } = attachedHome();
+  const elsewhere = join(root, "elsewhere");
+  mkdirSync(elsewhere);
+  await writeDb(elsewhere, LEDGER);
+  symlinkSync(join(elsewhere, "omakei-ledger.sqlite"), join(statements, "omakei-ledger.sqlite"));
+  writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify(LEDGER));
+  const out = await readLedgerForWidget("", envFor(home));
+  assert.equal(out.ledger, null);
+  assert.equal(out.path, join(statements, "omakei-ledger.sqlite"));
+});
+
+test("an override naming a database reads that folder's database", async () => {
+  const { root, home } = attachedHome();
+  const elsewhere = join(root, "elsewhere");
+  mkdirSync(elsewhere);
+  await writeDb(elsewhere, { version: 1, rules: [], transactions: [{ id: "b" }, { id: "c" }] });
+  const { ledger } = await readLedgerForWidget(join(elsewhere, "omakei-ledger.sqlite"), envFor(home));
+  assert.equal(ledger.transactions.length, 2);
+});
+
+test("the CLI prints the database's ledger as JSON", async () => {
+  const { home, statements } = attachedHome();
+  await writeDb(statements, LEDGER);
+  const out = execFileSync("node", ["scripts/omakei-read-ledger.mjs"], {
+    encoding: "utf8",
+    env: { ...process.env, HOME: home, XDG_STATE_HOME: join(home, ".local", "state") },
+  });
+  const parsed = JSON.parse(out);
+  assert.equal(parsed.path, join(statements, "omakei-ledger.sqlite"));
+  assert.equal(parsed.ledger.transactions[0].id, "a");
 });
