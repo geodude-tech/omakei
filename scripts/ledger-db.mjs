@@ -20,6 +20,7 @@
  */
 import { DatabaseSync } from "node:sqlite";
 import {
+  chmodSync,
   closeSync,
   constants as FS,
   fstatSync,
@@ -247,6 +248,10 @@ function openDb(dir, { readOnly = false, create = false, name = DB_FILENAME } = 
       now.isFile() &&
       (before === "missing" || (now.dev === before.dev && now.ino === before.ino));
     if (!same) throw new Error("ledger database changed while it was being opened");
+    // SQLite creates the file with the process umask (0644 here), where every
+    // other file Omakei writes is 0600. It gives its journal the database's
+    // mode, so setting it once on creation covers both.
+    if (before === "missing") chmodSync(`${at}/${name}`, 0o600);
     db.enableDefensive(true);
     db.exec("PRAGMA trusted_schema = OFF");
     if (!readOnly) db.exec("PRAGMA journal_mode = DELETE");
