@@ -6,9 +6,10 @@ _Status: documents existing behavior as of 2026-08-28. Traces to `docs/intent/om
 
 Be the one process that touches disk. The editor is a browser page with no
 filesystem of its own, so a small Node server owns the attached folder: it
-remembers which folder it is, lists and reads the statements in it, writes
-`omakei-ledger.json` back, and records the folder's real path where the bar
-widget can find it.
+remembers which folder it is, lists and reads the statements in it, keeps the
+ledger in `omakei-ledger.sqlite` beside them, and records the folder's real path
+where the bar widget can find it. The database itself is
+`docs/spec/ledger-sqlite.md`.
 
 The intent requires "nothing leaves the machine" and "time-to-display,
 time-to-save, and sync must stay immediate." Both fall on this component: it is
@@ -38,7 +39,7 @@ which reads `state.json` to locate the ledger.
 ## Tech Stack
 
 Node standard library only — `node:http`, `node:fs/promises`, `node:crypto`,
-`node:path`, `node:os`. **No npm dependencies**: `omarchy plugin add` clones the
+`node:path`, `node:os`, `node:sqlite`. **No npm dependencies**: `omarchy plugin add` clones the
 git tree and never runs `npm install`. The server scripts ship as source, not in
 `dist/`.
 
@@ -55,6 +56,7 @@ Test:                       npm test               # scripts/ledger-api.test.mjs
 
 ```
 scripts/ledger-api.mjs          → createLedgerApi(): the handler, path guards, disk primitives, state file
+scripts/ledger-db.mjs           → the SQLite ledger: guarded open, snapshot read, locked compare-and-set write, JSON import
 scripts/ledger-api-plugin.mjs   → mounts createLedgerApi() as Vite middleware (apply: "serve")
 scripts/omakei-serve.mjs        → node:http server over dist/, mounts the same handler
 scripts/omakei-html-plugin.mjs  → fills index.html placeholders on the dev server (build leaves them)
@@ -97,22 +99,24 @@ anything that reaches the port.
 | `GET /browse?path=` | Directory listing for the editor's folder picker (returns real paths), plus the statement count at and just below each row, the count two levels below `path`, `home`, and the `places` worth one click (home dirs and mounted volumes). Symlinked folders are followed — the picker has no path box, so a hidden folder is an unreachable one. `403` for a folder that cannot be read |
 | `GET /statements` | Every statement file under the folder, recursively, codepoint-sorted |
 | `GET /statements/file?path=` | One statement's text, `safeJoin`-checked, extension-checked, capped at 32 MB |
-| `PUT /ledger` | Requires `If-Match`. Validate `isLedgerPayload`, check the version, write atomically, bump revision. `428` without `If-Match`, `412` (carrying the current ledger and etag) against a version that has moved on |
+| `PUT /ledger` | Requires `If-Match`. Validate `isLedgerPayload`, then check the revision and replace the rows in one SQLite transaction, bump revision. `428` without `If-Match`, `412` (carrying the current ledger and etag) against a version that has moved on, `400` for a snapshot the schema cannot store (a duplicate id, a field with no column), `409` when a link or foreign file sits where the ledger goes |
 
 ### The ledger has more than one writer
 
-The file has two writers that do not know about each other: the editor, through
-`PUT /ledger`, and `omakei-categorize.mjs`, straight to disk. The editor holds
+The ledger has two writers that do not know about each other: the editor, through
+`PUT /ledger`, and `omakei-categorize.mjs`, straight to the database. The editor holds
 the whole ledger in memory for as long as its tab is open, so its next save used
 to reinstate everything the file had gained since — a rule added minutes ago,
 silently gone. Nothing about that looked like a race, and nothing reported it.
 
 So a save says which version it was derived from. `GET /state` returns
-`ledgerEtag`, the SHA-256 of the ledger file's bytes; `PUT /ledger` requires it
-back as `If-Match` and refuses the write if the file no longer hashes to it. A
-hash rather than an mtime or a counter: two writes in the same millisecond are
-indistinguishable by clock, and no single process is in a position to keep a
-counter honest.
+`ledgerEtag`, the database's ledger id and revision (`<id>-<revision>`);
+`PUT /ledger` requires it back as `If-Match` and refuses the write if the
+revision has moved. When the ledger was a JSON file the etag was a SHA-256 of
+its bytes, because no process could keep a counter honest. SQLite's write lock
+can: the revision is read and bumped inside the same `BEGIN IMMEDIATE`
+transaction as the write, in whichever process makes it. The id makes an etag
+from one folder's ledger useless against another's.
 
 - **`428`** — no `If-Match` at all. A blind write is the bug; there is no opting
   out of the check.
@@ -122,18 +126,19 @@ counter honest.
   read no ledger and expect there still to be none." It is what makes two
   clients both creating the first ledger resolve rather than collide.
 
-Writes are serialized inside the handler. Reading the etag and writing the file
-are two awaits, and without the queue a second request passes the check in the
-gap the first one left — which is precisely what the check exists to stop. Two
-editor tabs are enough to reach it.
+The check and the write are one transaction, so they cannot be separated by
+another writer in this process or any other. Writes are still queued inside the
+handler, so two editor tabs wait on the queue rather than on SQLite's busy
+timeout.
 
-`omakei-categorize.mjs` re-reads and compares immediately before it writes, and
-retries the whole operation up to three times. That narrows its own window; it
-does not close it, because nothing locks the file. See Open Questions.
+`omakei-categorize.mjs` does its read, re-categorize, and write inside one
+transaction too, so the window it used to narrow with a re-check and three
+retries is closed.
 
 ## Code Style
 
-Disk access goes through two primitives, and nothing else opens a file:
+Disk access goes through two primitives, and nothing else opens a file —
+except SQLite, which `ledger-db.mjs` opens under equivalent checks (below):
 
 ```js
 // Read: check on the descriptor, read from the same descriptor, bound the bytes.
@@ -163,8 +168,15 @@ Conventions:
 - **Every failure is bounded and quiet.** `bumpRevision` swallows its errors (a
   missed live-refresh is not a failed save). `readCapped` returns `null` for
   anything that is not a readable regular file within the cap.
-- **Caps are constants at the top of the file:** ledger 20 MB, statement 32 MB,
-  state file 64 KB.
+- **Caps are constants at the top of the file:** ledger 20 MB (the database, and
+  a JSON ledger being imported), statement 32 MB, state file 64 KB.
+- **SQLite is opened by pathname and follows a final-component symlink**, and
+  `node:sqlite` has no `SQLITE_OPEN_NOFOLLOW`. `ledger-db.mjs` therefore
+  inspects the file with `O_NOFOLLOW` first (regular, within the cap), refuses a
+  `-journal` / `-wal` / `-shm` beside it that is not a plain file, opens through
+  `/proc/self/fd/<dirfd>`, confirms the inode is unchanged after the open, and
+  keeps the directory descriptor open for the connection's lifetime so the
+  journal SQLite creates mid-write lands in the checked directory.
 
 ## Behavior this spec fixes in place
 
@@ -183,6 +195,13 @@ This is env-only; there is no dev-only code path.
 `readLedger` runs on every `/state` call into a long-lived server, so a ledger
 over 20 MB is refused there, not only on `PUT`. `page-shell.mjs` additionally
 refuses to inline a state payload over 4 MB, falling back to the `/state` fetch.
+
+### A state file from before SQLite is rewritten on startup
+
+`state.json` changes only on attach, so an install from before the move would
+keep `ledgerPath` naming `omakei-ledger.json` indefinitely. `currentDir()`
+rewrites a state file that differs from what `renderStateFile` would write for
+the same folder, keeping the folder.
 
 ### The revision file is written, never read here
 
@@ -259,8 +278,8 @@ Verified against the current suite (2026-08-28).
 2. **Met.** `npm run dev` and `npm run start` both serve the editor with the
    ledger inlined (`renderShell` in both `omakei-serve.mjs` and
    `omakei-html-plugin.mjs`).
-3. **Met.** A `PUT /ledger` rewrites `omakei-ledger.json` atomically and bumps
-   `ledger-revision`.
+3. **Met.** A `PUT /ledger` replaces the ledger in one SQLite transaction and
+   bumps `ledger-revision` (originally: rewrote `omakei-ledger.json` atomically).
 4. **Met.** A cross-origin request and a non-loopback `Host` both get `403`,
    on the static routes as well as the API, and a `null` or absent `Origin`
    cannot reach a write route.
@@ -269,7 +288,10 @@ Verified against the current suite (2026-08-28).
 
 ## Open Questions
 
-0. **The CLI's own write window is narrowed, not closed.** `PUT /ledger` is safe
+0. **Resolved (2026-09-14): the CLI's write window is closed.** Both writers now
+   use SQLite transactions (`docs/spec/ledger-sqlite.md`). The original note:
+
+   **The CLI's own write window is narrowed, not closed.** `PUT /ledger` is safe
    because the server checks and writes under one queue. `omakei-categorize.mjs`
    is a separate process writing the same file, so its check-then-write has a
    real gap: if the server writes inside it, the CLI still wins and the editor's

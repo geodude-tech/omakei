@@ -24,7 +24,7 @@ You do not need a ledger yet.
 
 1. Click the **Omakei** pill on the bar (or **Open Omakei** in the popup). The editor starts the first time you open it, which takes about a second; nothing runs in the background while Omakei is closed.
 2. Choose the folder that holds your statements — any folder you already use, or an empty one you will drop exports into.
-3. Omakei reads the files, auto-categorizes what it knows, and writes `omakei-ledger.json` into that same folder.
+3. Omakei reads the files, auto-categorizes what it knows, and keeps the ledger in `omakei-ledger.sqlite` in that same folder.
 4. The pill shows your net over the month ending today, so it reads the same on
    the 3rd as on the 23rd rather than sinking every time the big bills land. It
    updates whenever the ledger file changes.
@@ -57,7 +57,7 @@ In the popup: `[` / `]` change month, `t` jumps to this month, `o` opens Omakei,
 
 Omakei has no AI in it, and never will. What it has is one clean file.
 
-Every statement you drop in the folder ends up in `omakei-ledger.json` next to them: one flat list of transactions with dates, amounts, descriptions, accounts, and categories. Point an agent that can read local files — Claude Code, or any harness you already use — at that file and ask the things a spending app never answers well:
+Every statement you drop in the folder ends up in `omakei-ledger.sqlite` next to them: one table of transactions with dates, amounts, descriptions, accounts, and categories, plus `spend` and `income` views that already leave out transfers between your own accounts. Point an agent that can run `sqlite3` — Claude Code, or any harness you already use — at that file and ask the things a spending app never answers well:
 
 - Am I spending more than I make, over the last six months rather than this one?
 - Which categories are drifting up, and since when?

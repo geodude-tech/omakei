@@ -9,7 +9,7 @@ import { refreshCategories, seedRules } from "./ledger.ts";
 import { parseSetAsides } from "./set-asides.ts";
 import type { CategorizeRule, SetAside, Transaction } from "./types.ts";
 
-export const LEDGER_FILENAME = "omakei-ledger.json";
+export const LEDGER_FILENAME = "omakei-ledger.sqlite";
 const SAVE_DEBOUNCE_MS = 32;
 
 export type LedgerSnapshot = {

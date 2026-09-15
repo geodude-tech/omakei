@@ -371,3 +371,37 @@ test("category names are in the file, matching the build", async () => {
   );
   assert.equal(named.name, "Coffee");
 });
+
+/* -------------------------------------------------- docs/ledger.md holds */
+
+const LEDGER_DOC = readFileSync(new URL("../docs/ledger.md", import.meta.url), "utf8");
+
+test("every table and view docs/ledger.md lists is in the database, and nothing it does not", async () => {
+  const dir = folder();
+  await write(dir, LEDGER);
+  const section = LEDGER_DOC.slice(LEDGER_DOC.indexOf("| table or view |"));
+  const documented = [...section.slice(0, section.indexOf("\n\n")).matchAll(/^\| `([A-Za-z]+)` \|/gm)]
+    .map((m) => m[1])
+    .sort();
+  const actual = query(dir, "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name")
+    .map((r) => r.name)
+    .sort();
+  assert.deepEqual(documented, actual);
+});
+
+test("every SQL example in docs/ledger.md runs against a real ledger, and the worked net is right", async () => {
+  const dir = folder();
+  await write(dir, LEDGER);
+  const blocks = [...LEDGER_DOC.matchAll(/```sql\n([\s\S]*?)```/g)].map((m) => m[1]);
+  assert.ok(blocks.length >= 3, "the doc's SQL examples were found");
+  for (const sql of blocks) {
+    for (const statement of sql.split(";").map((s) => s.trim()).filter(Boolean)) {
+      assert.doesNotThrow(() => query(dir, statement), statement);
+    }
+  }
+  const [row] = query(dir, blocks.find((b) => b.includes("AS net")).replace(/;\s*$/, ""));
+  const spend = -LEDGER.transactions.filter(isSpend).reduce((a, t) => a + t.amount, 0);
+  const income = LEDGER.transactions.filter(isIncome).reduce((a, t) => a + t.amount, 0);
+  const setAsides = LEDGER.setAsides.reduce((a, s) => a + s.amount, 0);
+  assert.equal(Math.round(row.net * 100), Math.round((income - spend - setAsides) * 100));
+});

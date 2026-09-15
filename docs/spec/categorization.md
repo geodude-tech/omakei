@@ -19,7 +19,7 @@ Two things have to be true:
   not lying. The built-in patterns carry this.
 - **Cheap to correct**, two ways: the user fixes the handful that matter, one
   merchant at a time, in the app; an agent at the terminal fixes them in bulk by
-  writing rules into `omakei-ledger.json` — the loop `docs/ledger.md` opens for
+  writing rules with `omakei-categorize.mjs` — the loop `docs/ledger.md` opens for
   reading, closed for writing.
 
 What this is **not**: no ML, no model call, no classifier training, no
@@ -49,8 +49,9 @@ is here, everything before it is statement-import.
   `createdAt` descending breaks ties. Unit-tested.
 - `null` survives import and `refreshCategories` untouched — never coerced to
   `other`. Unit-tested.
-- An agent appends `{ id, pattern, categoryId, createdAt, source: "user" }` to
-  `rules[]` in `omakei-ledger.json`; the next time the editor loads and syncs,
+- An agent adds `{ id, pattern, categoryId, createdAt, source: "user" }` to the
+  ledger's rules (today through `omakei-categorize.mjs`, which writes the
+  `rules` table of `omakei-ledger.sqlite`); the next time the editor loads and syncs,
   every matching transaction carries that `categoryId`, and a re-sync neither
   drops the rule nor changes the result.
 - `RulesSheet` names only affordances that exist.
@@ -201,7 +202,7 @@ case if the match isn't obvious.
 - Add a model call, an API key, a "suggest categories" button, or any AI surface.
   The agent lives in the terminal.
 - Coerce `null` to `other` anywhere upstream of a grouped view.
-- Persist default rules into `omakei-ledger.json`.
+- Persist default rules into the ledger.
 - Replay `rules` against `description` to "reconstruct" categories — the defaults
   ship in the build, so the replay is incomplete by construction (ledger rule 5).
 

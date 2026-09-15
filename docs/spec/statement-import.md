@@ -245,7 +245,7 @@ obvious.
   fixture (docs/agents.md).
 - Replay `rules` against `description` to "reproduce" categories — defaults ship
   in the build, so the replay is incomplete by construction (ledger rule 5).
-- Persist default rules into `omakei-ledger.json`. `snapshotFromState` filters to
+- Persist default rules into the ledger. `snapshotFromState` filters to
   `source === "user"` on the way out.
 
 ## Success Criteria
