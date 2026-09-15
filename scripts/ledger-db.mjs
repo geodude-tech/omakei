@@ -31,6 +31,7 @@ import {
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import {
+  DB_FILENAME,
   LEDGER_FILENAME,
   MAX_LEDGER_BYTES,
   isLedgerPayload,
@@ -38,7 +39,7 @@ import {
   readCapped,
 } from "./ledger-api.mjs";
 
-export const DB_FILENAME = "omakei-ledger.sqlite";
+export { DB_FILENAME };
 export const SCHEMA_VERSION = 2;
 
 /** How long a write waits on another process's lock before giving up. Writes take milliseconds. */
@@ -66,6 +67,10 @@ const SET_ASIDE_COLUMNS = ["id", "name", "amount"];
  * Column names are the JSON contract's names, so an agent that learned the
  * ledger from `docs/ledger.md` already knows them. `seq` keeps insertion order,
  * which the app relies on; `id` stays unique because the editor merges by it.
+ *
+ * No secondary indexes. Every save replaces every row, and at 30k transactions
+ * three indexes more than doubled that (~110ms to ~240ms), while a full scan of
+ * the same table answers an agent's query in milliseconds.
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -85,9 +90,6 @@ CREATE TABLE IF NOT EXISTS transactions (
   categoryId  TEXT,
   importedAt  INTEGER
 );
-CREATE INDEX IF NOT EXISTS transactions_date ON transactions(date);
-CREATE INDEX IF NOT EXISTS transactions_category ON transactions(categoryId);
-CREATE INDEX IF NOT EXISTS transactions_fingerprint ON transactions(fingerprint);
 CREATE TABLE IF NOT EXISTS rules (
   seq        INTEGER PRIMARY KEY,
   id         TEXT,
@@ -277,10 +279,19 @@ function etagOf(db) {
 }
 
 function rowsOf(db, table, columns) {
-  return db
-    .prepare(`SELECT ${columns.join(", ")} FROM ${table} ORDER BY seq`)
-    .all()
-    .map((row) => Object.fromEntries(columns.map((c) => [c, row[c] ?? null])));
+  const statement = db.prepare(`SELECT ${columns.join(", ")} FROM ${table} ORDER BY seq`);
+  // Arrays skip building a null-prototype object per row that would only be
+  // copied into a plain one; a quarter of the read at 30k rows. Older Node
+  // lacks the switch and gets the objects.
+  if (typeof statement.setReturnArrays === "function") {
+    statement.setReturnArrays(true);
+    return statement.all().map((values) => {
+      const row = {};
+      for (let i = 0; i < columns.length; i++) row[columns[i]] = values[i] ?? null;
+      return row;
+    });
+  }
+  return statement.all().map((row) => Object.fromEntries(columns.map((c) => [c, row[c] ?? null])));
 }
 
 /** The ledger in the JSON snapshot shape, or null when nothing has been written. */
@@ -485,37 +496,50 @@ function inspectPath(dir) {
 /**
  * Read, decide, and write as one transaction under SQLite's write lock.
  *
- * `decide(ledger, etag)` gets the ledger as it is right now and returns the
- * snapshot to store, or null to leave it alone. It must be synchronous: nothing
- * else can write while it runs, which is the whole point, so it should not wait
- * on anything either.
+ * `decide({ etag, ledger })` sees the version as it is right now and returns
+ * the snapshot to store, or null to leave it alone. `ledger` is read only if
+ * `decide` touches it: a save that only compares etags should not pay for
+ * reading every row first. `decide` must be synchronous -- nothing else can
+ * write while it runs, which is the whole point, so it should not wait on
+ * anything either.
  *
- * Resolves `{ written, ledger, etag }` -- the stored snapshot and its new etag
- * when written, the untouched current one otherwise. Rejects with
- * `LedgerShapeError` for a snapshot that cannot be stored, and resolves null
- * when the database is refused.
+ * Resolves `{ written: true, ledger, etag }` with the snapshot `decide` returned
+ * and the new etag, or `{ written: false, ledger, etag }` with the untouched
+ * current ledger. Rejects with `LedgerShapeError` for a snapshot that cannot be
+ * stored, and resolves null when the database is refused.
  */
 export async function updateLedgerDb(dir, decide, { create = true } = {}) {
   await importJsonLedger(dir);
   const handle = openDb(dir, { create });
   if (!handle) return null;
   try {
-    ensureSchema(handle.db);
+    // Only a database with nothing in it yet is given the schema. Adding tables
+    // to some other SQLite file would quietly adopt it as the ledger.
+    const empty = handle.db.prepare("SELECT count(*) AS n FROM sqlite_master").get().n === 0;
+    if (empty) ensureSchema(handle.db);
     if (!isOurs(handle.db)) return null;
     const { db } = handle;
     db.exec("BEGIN IMMEDIATE");
     try {
-      const current = readSnapshot(db);
       const etag = etagOf(db);
-      const next = decide(current, etag);
+      let current;
+      const view = {
+        etag,
+        get ledger() {
+          if (current === undefined) current = readSnapshot(db);
+          return current;
+        },
+      };
+      const next = decide(view);
       if (!next) {
+        const ledger = view.ledger;
         db.exec("ROLLBACK");
-        return { written: false, ledger: current, etag };
+        return { written: false, ledger, etag };
       }
       replaceSnapshot(db, next);
-      const after = { ledger: readSnapshot(db), etag: etagOf(db) };
+      const written = etagOf(db);
       db.exec("COMMIT");
-      return { written: true, ...after };
+      return { written: true, ledger: next, etag: written };
     } catch (err) {
       if (db.isTransaction) db.exec("ROLLBACK");
       throw err;

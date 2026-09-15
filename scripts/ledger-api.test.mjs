@@ -32,6 +32,10 @@ import {
   withDir,
   writeAtomic,
 } from "./ledger-api.mjs";
+import { readLedgerDb, updateLedgerDb } from "./ledger-db.mjs";
+
+/** What `omakei-categorize.mjs` does: write the ledger straight to the database, bypassing the server. */
+const writeUnderneath = (dir, ledger) => updateLedgerDb(dir, () => ledger);
 
 const temps = [];
 
@@ -123,7 +127,7 @@ test("attaching a folder makes the ledger readable, writable, and findable", asy
     state = await attached.json();
     assert.equal(state.folder.path, statements);
     assert.equal(state.folder.name, "Statements");
-    assert.equal(state.ledgerPath, join(statements, "omakei-ledger.json"));
+    assert.equal(state.ledgerPath, join(statements, "omakei-ledger.sqlite"));
 
     // The state file the widget reads now points at that ledger.
     const recorded = parseStateFile(readFileSync(s.api.statePath, "utf8"));
@@ -150,8 +154,9 @@ test("attaching a folder makes the ledger readable, writable, and findable", asy
     };
     const put = await putLedger(s, ledger);
     assert.equal(put.status, 200);
-    const onDisk = JSON.parse(readFileSync(join(statements, "omakei-ledger.json"), "utf8"));
+    const { ledger: onDisk } = await readLedgerDb(statements);
     assert.equal(onDisk.transactions[0].id, "a");
+    assert.equal(existsSync(join(statements, "omakei-ledger.json")), false, "the JSON is not written");
 
     // And comes straight back on the next open.
     state = await (await s.call("/state")).json();
@@ -265,6 +270,7 @@ test("a malformed ledger never reaches disk", async () => {
       assert.equal(res.status, 400);
     }
     assert.throws(() => readFileSync(join(statements, "omakei-ledger.json")));
+    assert.equal(existsSync(join(statements, "omakei-ledger.sqlite")), false);
   } finally {
     await s.close();
   }
@@ -546,25 +552,24 @@ test("a symlink at the predictable temp path cannot capture the write", async ()
     const put = await putLedger(s, { version: 1, transactions: [], rules: [], selectedMonth: "2026-08" });
     assert.equal(put.status, 200);
     assert.equal(readFileSync(canary, "utf8"), "untouched", "the write must not follow the planted link");
-    assert.match(readFileSync(join(statements, "omakei-ledger.json"), "utf8"), /"version":1/);
+    assert.equal((await readLedgerDb(statements)).ledger.selectedMonth, "2026-08");
   } finally {
     await s.close();
   }
 });
 
-test("a symlinked destination is replaced, not written through", async () => {
+test("a symlinked destination is refused, not written through", async () => {
   const { root, home, statements } = tempTree();
-  const canary = join(root, "canary.json");
+  const canary = join(root, "canary.sqlite");
   writeFileSync(canary, "untouched");
   const s = await attached(home, statements);
   try {
-    const dest = join(statements, "omakei-ledger.json");
+    const dest = join(statements, "omakei-ledger.sqlite");
     symlinkSync(canary, dest);
-    const put = await putLedger(s, { version: 1, transactions: [], rules: [], selectedMonth: "2026-08" });
-    assert.equal(put.status, 200);
+    const put = await putLedger(s, { version: 1, transactions: [], rules: [], selectedMonth: "2026-08" }, "");
+    assert.equal(put.status, 409, "SQLite would follow the link, so the write is refused instead");
     assert.equal(readFileSync(canary, "utf8"), "untouched");
-    assert.equal(statSync(dest).isSymbolicLink?.() ?? false, false);
-    assert.throws(() => readlinkSync(dest), "the link itself was replaced by the real file");
+    assert.equal(readlinkSync(dest), canary, "and what the user left there is left alone");
   } finally {
     await s.close();
   }
@@ -765,7 +770,7 @@ test("path and header helpers", () => {
   assert.equal(isAllowedOrigin("null", "PUT"), false);
   assert.equal(isAllowedOrigin("http://127.0.0.1:8080", "POST"), true);
 
-  assert.match(renderStateFile("/s"), /"ledgerPath":"\/s\/omakei-ledger\.json"/);
+  assert.match(renderStateFile("/s"), /"ledgerPath":"\/s\/omakei-ledger\.sqlite"/);
   assert.equal(parseStateFile(renderStateFile("")), null);
 });
 
@@ -774,23 +779,22 @@ test("path and header helpers", () => {
 test("a save derived from a stale ledger is refused, and changes nothing", async () => {
   const { home, statements } = tempTree();
   const s = await attached(home, statements);
-  const path = join(statements, "omakei-ledger.json");
   try {
     const base = { version: 1, selectedMonth: "2026-08", transactions: [], rules: [], setAsides: [] };
     const first = await putLedger(s, base);
     assert.equal(first.status, 200);
     const staleEtag = (await first.json()).etag;
 
-    // Something else writes the file — this is `omakei-categorize.mjs`, which
-    // owns the same file and knows nothing about the server.
+    // Something else writes the ledger — this is `omakei-categorize.mjs`, which
+    // writes the same database and knows nothing about the server.
     const theirs = { ...base, rules: [{ id: "r1", pattern: "co-op", categoryId: "groceries", createdAt: 1, source: "user" }] };
-    await writeAtomic(path, `${JSON.stringify(theirs)}\n`);
+    await writeUnderneath(statements, theirs);
 
     // The editor still holds what it read before that, and saves it.
     const late = await putLedger(s, { ...base, selectedMonth: "2026-09" }, staleEtag);
     assert.equal(late.status, 412, "a save against a version that has moved on is refused");
 
-    const onDisk = JSON.parse(readFileSync(path, "utf8"));
+    const { ledger: onDisk } = await readLedgerDb(statements);
     assert.equal(onDisk.rules.length, 1, "the rule written underneath survives");
     assert.equal(onDisk.rules[0].pattern, "co-op");
     assert.equal(onDisk.selectedMonth, "2026-08", "and the stale save landed nowhere");
@@ -807,7 +811,7 @@ test("a refused save hands back what it lost to, so a client can merge in one tr
     const stale = (await (await putLedger(s, base)).json()).etag;
 
     const theirs = { ...base, transactions: [{ id: "t1", date: "2026-08-02", amount: -4.5 }] };
-    await writeAtomic(join(statements, "omakei-ledger.json"), `${JSON.stringify(theirs)}\n`);
+    await writeUnderneath(statements, theirs);
 
     const refused = await putLedger(s, base, stale);
     assert.equal(refused.status, 412);
@@ -834,6 +838,7 @@ test("a save with no If-Match at all is refused", async () => {
     });
     assert.equal(res.status, 428, "a blind write is the bug; there is no opting out of the check");
     assert.equal(existsSync(join(statements, "omakei-ledger.json")), false);
+    assert.equal(existsSync(join(statements, "omakei-ledger.sqlite")), false);
   } finally {
     await s.close();
   }
@@ -874,6 +879,55 @@ test("two saves racing on the same version cannot both land", async () => {
 
     const codes = [a.status, b.status].sort();
     assert.deepEqual(codes, [200, 412], "exactly one wins");
+  } finally {
+    await s.close();
+  }
+});
+
+/* ------------------------------------------------------ the JSON ledger */
+
+test("a folder with only a JSON ledger is imported on first read, and the JSON is left exactly as it was", async () => {
+  const { home, statements } = tempTree();
+  const jsonPath = join(statements, "omakei-ledger.json");
+  const text = `${JSON.stringify({
+    version: 1,
+    savedAt: "2026-08-27T00:00:00.000Z",
+    selectedMonth: "2026-08",
+    transactions: [{ id: "a", date: "2026-08-02", amount: -4.5 }],
+    rules: [],
+    setAsides: [],
+  })}\n`;
+  writeFileSync(jsonPath, text);
+  const mtime = statSync(jsonPath).mtimeMs;
+  const s = await attached(home, statements);
+  try {
+    const state = await (await s.call("/state")).json();
+    assert.equal(state.ledger.transactions[0].id, "a");
+    assert.notEqual(state.ledgerEtag, "", "the imported ledger is a real version to write against");
+
+    const put = await putLedger(s, { ...state.ledger, selectedMonth: "2026-09" }, state.ledgerEtag);
+    assert.equal(put.status, 200);
+    assert.equal((await readLedgerDb(statements)).ledger.selectedMonth, "2026-09");
+
+    assert.equal(readFileSync(jsonPath, "utf8"), text, "the JSON is never written");
+    assert.equal(statSync(jsonPath).mtimeMs, mtime);
+  } finally {
+    await s.close();
+  }
+});
+
+test("a ledger the database cannot store is a 400, and nothing changes", async () => {
+  const { home, statements } = tempTree();
+  const s = await attached(home, statements);
+  try {
+    const base = { version: 1, selectedMonth: "2026-08", transactions: [], rules: [], setAsides: [] };
+    const etag = (await (await putLedger(s, base)).json()).etag;
+    const twice = { id: "a", date: "2026-08-02", amount: -4.5 };
+    const res = await putLedger(s, { ...base, transactions: [twice, twice] }, etag);
+    assert.equal(res.status, 400);
+    const state = await (await s.call("/state")).json();
+    assert.equal(state.ledgerEtag, etag);
+    assert.deepEqual(state.ledger.transactions, []);
   } finally {
     await s.close();
   }
