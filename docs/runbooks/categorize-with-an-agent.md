@@ -47,8 +47,17 @@ STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omakei/state.json"
 LEDGER=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).ledgerPath' "$STATE")
 ```
 
-- Copy the ledger somewhere **outside** the statements folder and outside this
-  repository, e.g. `~/.local/state/omakei/omakei-ledger.backup-YYYY-MM-DD.json`.
+  `$LEDGER` is `omakei-ledger.sqlite`. If it still ends in `.json`, the editor
+  has not run since the ledger moved to SQLite: open it once (that imports the
+  JSON), then start again.
+
+- Back the ledger up somewhere **outside** the statements folder and outside
+  this repository. `.backup` is safe while the server is running, unlike `cp`:
+
+```sh
+sqlite3 -readonly "$LEDGER" ".backup '$HOME/.local/state/omakei/omakei-ledger.backup-$(date +%F).sqlite'"
+```
+
 - The editor may stay open. If you plan to restore a backup later, close it
   first.
 - Record the spend total for every month, before anything changes (step 7
@@ -56,16 +65,9 @@ LEDGER=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")
 
 ```sh
 spend_by_month() {
-  node -e '
-  const l = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  const spend = {};
-  for (const t of l.transactions) {
-    if (t.amount >= 0 || t.categoryId === "transfers") continue;
-    const m = t.date.slice(0, 7);
-    spend[m] = Math.round(((spend[m] ?? 0) - t.amount) * 100) / 100;
-  }
-  for (const m of Object.keys(spend).sort()) console.log(m, spend[m].toFixed(2));
-  ' "$LEDGER"
+  # The `spend` view is rule 1 (and 3) already applied.
+  sqlite3 -readonly -separator ' ' "$LEDGER" \
+    "SELECT substr(date, 1, 7), printf('%.2f', -sum(amount)) FROM spend GROUP BY 1 ORDER BY 1"
 }
 spend_by_month > /tmp/omakei-spend-before.txt
 ```
@@ -80,11 +82,8 @@ The merchant key alone is often not enough to decide. Pull the rows behind the
 ones you are unsure of — dates, amounts, accounts — from the ledger:
 
 ```sh
-node -e '
-const l = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-for (const t of l.transactions.filter((t) => !t.categoryId))
-  console.log(t.id, t.date, t.amount, t.accountKind, JSON.stringify(t.description));
-' "$LEDGER"
+sqlite3 -readonly "$LEDGER" \
+  "SELECT id, date, amount, accountKind, description FROM uncategorized ORDER BY date"
 ```
 
 A regular amount on a regular day is a bill. The same amount in and out of two
@@ -202,7 +201,7 @@ change — a transfer that seemed mispaired, a duplicate-looking row.
 |---|---|
 | A wrong rule | `scripts/omakei-categorize.mjs --remove "<pattern>"` — its rows return to whatever else matches, or `null` |
 | A wrong pin | `--pin '<id>' <correct category>`. There is no unpin command yet |
-| The whole session | Close the editor tab, then copy the step 0 backup back over the ledger |
+| The whole session | Close the editor tab, then `sqlite3 "$LEDGER" ".restore '<the step 0 backup>'"` |
 
 ## Every month, after a sync
 

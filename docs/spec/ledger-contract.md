@@ -48,7 +48,9 @@ an agent, and both are guarded by `npm test` rather than trusted.
 
 Three alternatives were considered and rejected:
 
-- **Embed the semantics in `omakei-ledger.json`.** docs/agents.md requires the ledger
+- **Embed the semantics in `omakei-ledger.json`.** (The JSON ledger this spec was
+  written against; the SQLite ledger that replaced it does carry the semantics,
+  as views.) docs/agents.md requires the ledger
   persist compactly, and the rules are about ten times the size of a month of
   transactions. Rejected.
 - **Write a README into the statements folder.** The server would have to write
@@ -142,7 +144,13 @@ workflow — write one file, run `npm run build` — hits this on the first try.
    copy next to the ledger, at the cost of putting a second Omakei-owned file in
    the user's folder. Proposal: not yet — Andrew works in a clone, and the doc is
    linked from README for everyone else.
-2. **Does this settle SQLite?** The intent asks for the decision on legibility
+2. ~~**Does this settle SQLite?**~~ _Resolved 2026-09-14: the ledger moved to
+   SQLite (`docs/spec/ledger-sqlite.md`)._ The proposal below was right that the
+   rules, not the format, were the missing piece — which is why the move put the
+   rules into the file as views rather than relying on the format alone. Kept for
+   the record:
+
+   The intent asks for the decision on legibility
    grounds. The loop run says the JSON was legible enough once five rules were
    written down, and that the rules — not the format — were the missing piece.
    SQLite would not have prevented a single one of the errors measured here, and

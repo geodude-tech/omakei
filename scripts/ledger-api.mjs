@@ -3,7 +3,8 @@
  *
  * The editor is a browser page with no filesystem of its own, so the server
  * owns the attached folder: it remembers which folder that is, lists and reads
- * the statements in it, and writes `omakei-ledger.json` back into it. Both the
+ * the statements in it, and keeps the ledger beside them in
+ * `omakei-ledger.sqlite` (see `ledger-db.mjs`). Both the
  * Vite dev server and `omakei-serve.mjs` mount this same handler, so what you
  * see in development is what an installer runs.
  *
@@ -19,25 +20,29 @@ import { mkdir, open, readdir, rename, stat, unlink } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import { LedgerShapeError, jsonChangedSinceImport, readLedgerDb, updateLedgerDb } from "./ledger-db.mjs";
 
 export const API_PREFIX = "/__omakei";
+/**
+ * The JSON ledger an earlier Omakei wrote. Read once, to import it into the
+ * database, and never written again.
+ */
 export const LEDGER_FILENAME = "omakei-ledger.json";
+/** The ledger. */
+export const DB_FILENAME = "omakei-ledger.sqlite";
 /** Rewritten whenever the ledger changes, so the bar widget knows to re-read. */
 export const REVISION_FILENAME = "ledger-revision";
 
 export const MAX_LEDGER_BYTES = 20 * 1024 * 1024;
 
 /**
- * Identity of the ledger file as it sits on disk right now.
+ * Identity of a JSON ledger's bytes.
  *
- * Hashing the bytes rather than trusting an mtime or a counter: two writes in
- * the same millisecond are indistinguishable by clock, and the file has more
- * than one writer. `omakei-categorize.mjs` writes it directly, the editor
- * writes it through `PUT /ledger`, and neither knows about the other. The hash
- * is what lets a write say which version it was derived from.
+ * This was the etag when the ledger was a JSON file. The database's etag is its
+ * revision now (see `ledger-db.mjs`); the hash survives to record which JSON a
+ * database was imported from, so a later change to that file can be noticed.
  *
- * An absent ledger hashes to "", which is a real value a caller can present:
- * "I read no ledger, and expect there still to be none."
+ * An absent file hashes to "".
  */
 export function ledgerEtag(raw) {
   if (!raw || raw.length === 0) return "";
@@ -136,7 +141,7 @@ export function renderStateFile(statementsDir) {
   return `${JSON.stringify({
     version: 1,
     statementsDir: statementsDir || "",
-    ledgerPath: statementsDir ? join(statementsDir, LEDGER_FILENAME) : "",
+    ledgerPath: statementsDir ? join(statementsDir, DB_FILENAME) : "",
   })}\n`;
 }
 
@@ -193,7 +198,7 @@ function readBody(req, limit) {
  * path component.
  *
  * Everything Omakei reads sits in a directory the user chose, and the paths are
- * predictable: `omakei-ledger.json`, `state.json`, the statements themselves.
+ * predictable: the JSON ledger, `state.json`, the statements themselves.
  * Checking a path and then re-opening it by that path leaves a window where
  * what was checked and what is read are different files, so the check happens
  * on the descriptor and the read comes from the same descriptor.
@@ -484,11 +489,17 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
   async function currentDir() {
     if (cached === undefined) {
       const raw = await readCapped(statePath, MAX_STATE_BYTES);
-      const saved = parseStateFile(raw ? raw.toString("utf8") : "");
+      const text = raw ? raw.toString("utf8") : "";
+      const saved = parseStateFile(text);
       // The env var is a convenience default for development. It seeds the
       // same state every other install writes, so no code path is dev-only.
       cached = saved?.statementsDir || (seedDir ? resolve(expandHome(seedDir, home)) : null);
       if (!saved && cached) await persist(cached);
+      // A state file written before the ledger moved to SQLite names the JSON
+      // as `ledgerPath`, and nothing else would ever rewrite it: it changes only
+      // on attach. An agent following docs/ledger.md would then read a ledger
+      // nothing writes any more, so the server brings it up to date on startup.
+      else if (saved && text !== renderStateFile(saved.statementsDir)) await persist(saved.statementsDir);
     }
     return cached;
   }
@@ -505,29 +516,33 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
   const bumpRevision = () => bumpRevisionAt(stateDir);
 
   /**
-   * The ledger as it is on disk, with the etag of the exact bytes it parsed
-   * from. The two travel together on purpose: an etag taken from a second read
+   * The ledger as it is in the database, with the etag of exactly that version.
+   * The two come from one read on purpose: an etag taken from a second read
    * could name a version the caller never saw.
+   *
+   * A folder that still has only a JSON ledger is imported here, on first read.
+   * A database that is refused -- a symlink, over the cap, not an Omakei ledger
+   * -- reads as no ledger, the way a refused JSON file always did.
    */
+  const warnedJson = new Set();
   async function readLedgerAt(dir) {
-    // A ledger larger than the cap is refused on the way in as well as on the
-    // way out: this runs on every /state call, into a long-lived server.
-    const raw = await readCapped(join(dir, LEDGER_FILENAME), MAX_LEDGER_BYTES);
-    const etag = ledgerEtag(raw);
-    if (!raw) return { ledger: null, etag };
-    try {
-      const parsed = JSON.parse(raw.toString("utf8"));
-      return { ledger: isLedgerPayload(parsed) ? parsed : null, etag };
-    } catch {
-      return { ledger: null, etag };
+    const found = await readLedgerDb(dir, { importJson: true });
+    if (found && !warnedJson.has(dir)) {
+      warnedJson.add(dir);
+      if (await jsonChangedSinceImport(dir)) {
+        console.warn(
+          `[omakei] ${join(dir, LEDGER_FILENAME)} has changed since it was imported. ` +
+            `The ledger is ${join(dir, DB_FILENAME)}; those changes are not in it.`,
+        );
+      }
     }
+    return found ?? { ledger: null, etag: "" };
   }
 
   /**
-   * Writes are serialized. Reading the etag and writing the file are two awaits,
-   * and without this a second request can pass the check in the gap the first
-   * one left — which is the very thing the check exists to stop. Two editor
-   * tabs are enough to reach it.
+   * Writes are serialized. The database's transaction already makes the check
+   * and the write atomic against every process; the queue keeps this server's
+   * own saves from waiting on SQLite's lock for each other.
    */
   let writeQueue = Promise.resolve();
   function serialize(fn) {
@@ -551,7 +566,7 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
     return {
       folder: { path: dir, name: basename(dir) },
       ledger,
-      ledgerPath: join(dir, LEDGER_FILENAME),
+      ledgerPath: join(dir, DB_FILENAME),
       ledgerEtag: etag,
       home,
     };
@@ -753,21 +768,33 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
         }
 
         const body = await serialize(async () => {
-          const current = await readLedgerAt(dir);
-          if (ifMatch !== current.etag) {
+          let result;
+          try {
+            result = await updateLedgerDb(dir, ({ etag }) => (ifMatch === etag ? parsed : null));
+          } catch (err) {
+            if (err instanceof LedgerShapeError) {
+              return { status: 400, payload: { error: `Invalid ledger: ${err.message}` } };
+            }
+            throw err;
+          }
+          if (!result) {
+            // A link, a FIFO, or something that is not an Omakei ledger sits where
+            // the ledger goes. It is not written through and not replaced: the
+            // user put it there, or something did, and either way it is theirs.
+            return { status: 409, payload: { error: "The ledger in this folder cannot be opened safely" } };
+          }
+          if (!result.written) {
             return {
               status: 412,
               payload: {
                 error: "The ledger changed since you read it",
-                etag: current.etag,
-                ledger: current.ledger,
+                etag: result.etag,
+                ledger: result.ledger,
               },
             };
           }
-          const text = `${JSON.stringify(parsed)}\n`;
-          await writeAtomic(join(dir, LEDGER_FILENAME), text);
           await bumpRevision();
-          return { status: 200, payload: { ok: true, etag: ledgerEtag(Buffer.from(text)) } };
+          return { status: 200, payload: { ok: true, etag: result.etag } };
         });
 
         json(res, body.status, body.payload);

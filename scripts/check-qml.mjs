@@ -31,6 +31,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderStateFile } from "./ledger-api.mjs";
+import { readLedgerDb, updateLedgerDb } from "./ledger-db.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SHELL = "/usr/share/omarchy/shell";
@@ -79,7 +80,7 @@ try {
   mkdirSync(statements, { recursive: true });
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(join(stateDir, "state.json"), renderStateFile(statements));
-  writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify(ledger()));
+  await updateLedgerDb(statements, () => ledger());
 
   const scene = readFileSync(join(ROOT, "qml-harness", "scene.qml"), "utf8")
     .replace("@REPO@", ROOT)
@@ -109,8 +110,8 @@ try {
   }
   if (failed.length > 0) process.exit(1);
 
-  // The harness said it wrote; check the file it wrote to, from out here.
-  const written = JSON.parse(readFileSync(join(statements, "omakei-ledger.json"), "utf8"));
+  // The harness said it wrote; check the ledger it wrote to, from out here.
+  const { ledger: written } = await readLedgerDb(statements);
   const rules = written.rules.map((r) => `${r.pattern}=${r.categoryId}`).sort();
   const expected = ["PORCH SUPPLY=groceries", "ZORP WIDGETS=shopping"];
   if (rules.join() !== expected.join()) {
@@ -118,7 +119,7 @@ try {
     process.exit(1);
   }
   const passed = lines.filter((l) => l.trim().startsWith("PASS")).length;
-  console.log(`qml check: ${passed + runPanelScene()} checks passed`);
+  console.log(`qml check: ${passed + (await runPanelScene())} checks passed`);
 } finally {
   rmSync(stage, { recursive: true, force: true });
   if (panelStage) rmSync(panelStage, { recursive: true, force: true });
@@ -131,7 +132,7 @@ try {
  * display, and neither does a headless checkout. Returns how many checks
  * passed, and exits the process itself on failure.
  */
-function runPanelScene() {
+async function runPanelScene() {
   if (!process.env.WAYLAND_DISPLAY) {
     console.log("qml check: no WAYLAND_DISPLAY, so the panel scene is skipped");
     return 0;
@@ -147,7 +148,7 @@ function runPanelScene() {
   mkdirSync(statements, { recursive: true });
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(join(stateDir, "state.json"), renderStateFile(statements));
-  writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify(rollingLedger()));
+  await updateLedgerDb(statements, () => rollingLedger());
   writeFileSync(
     join(panelStage, "shell.qml"),
     readFileSync(join(ROOT, "qml-harness", "panel-scene.qml"), "utf8").replace("@REPO@", ROOT),

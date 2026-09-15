@@ -16,7 +16,7 @@ One tree holds everything: the shell-loaded widget files at the root, and the ed
 
 The editor is a static SPA served by `scripts/omakei-serve.mjs`. `dist/` is committed on purpose: the installer clones the git tree and never runs `npm install`, so the build has to be in the tree already. The server has no npm dependencies, and `scripts/omakei-open` starts it on demand when the widget opens Omakei.
 
-**The server owns the attached folder.** `scripts/ledger-api.mjs` is the one place that touches disk — it remembers which folder is attached, lists and reads the statements in it, and writes `omakei-ledger.json` back. The browser has no filesystem of its own and no cached copy of the ledger.
+**The server owns the attached folder.** `scripts/ledger-api.mjs` is the one place that touches disk — it remembers which folder is attached, lists and reads the statements in it, and keeps the ledger beside them in `omakei-ledger.sqlite` (through `scripts/ledger-db.mjs`, which it alone of the shipped code opens). The browser has no filesystem of its own and no cached copy of the ledger.
 
 Both the Vite dev server and `omakei-serve.mjs` mount that same handler, so development and an installed plugin run identical disk code. Anything that only one of them can do is a bug: that split is what let an earlier version ship a data path nobody exercised by hand.
 
@@ -82,18 +82,18 @@ Build inputs are listed in `scripts/build-inputs.mjs`. Tests are excluded; QML a
 ## Product
 
 - **The product is the ledger and the loop; the widget is one view.** The bar pill is the hook — it is why Omarchy is the right place to ship this, since its users already have an agent on the machine — but it does not drive design decisions. README is for widget install and use, not app or development setup.
-- **No AI inside the app.** No chat UI, no model calls, no API key. The agent lives in the user's terminal and reads `omakei-ledger.json` directly. Adding an "ask Omakei" box would be a helpful-looking mistake; the app stays deliberately dumb and fast.
+- **No AI inside the app.** No chat UI, no model calls, no API key. The agent lives in the user's terminal and queries `omakei-ledger.sqlite` directly, read-only. Adding an "ask Omakei" box would be a helpful-looking mistake; the app stays deliberately dumb and fast.
 - Shell-loaded files at the repo root: `manifest.json`, `BarWidget.qml`, `Panel.qml`, `Model.js`. `omarchy plugin add` clones the public git tree, and `node_modules` never belongs in a plugin install (symlinks fail validation).
 - Daily viewing stays in the bar popup. Attaching a folder, one-off imports, rules, and the full activity table stay in the editor, and are not rebuilt inside the popup.
 - Tailwind's sources are pinned in `src/styles.css` (`source(none)` plus explicit `@source`). Auto-detection would scan the committed `dist/`, so each build would find the previous bundle's class names and the CSS would grow every time. `@source "./"` already covers everything under `src/`, so a new component or panel needs no change; only a file **outside** `src/` that emits class names gets its own `@source` line, as `page-shell.mjs` does.
 - The bundle carries neither a theme nor data. `dist/index.html` keeps `<!--omakei:head-->` and `<!--omakei:state-->` placeholders that `scripts/page-shell.mjs` fills per request with the user's Omarchy theme and their ledger, so one committed build looks right on every machine and paints real numbers on the first frame.
 - The server serves `127.0.0.1` only and refuses to start on a non-loopback `OMAKEI_HOST`; the loopback socket, Host, and Origin guards in `ledger-api.mjs` cover the static routes as well as the API, because the SPA shell is filled with the ledger. This is a personal ledger; nothing else on the network — or in the user's browser — reaches it.
 - Time-to-display, time-to-save, and sync must stay immediate. There is no sample/dummy ledger.
-- `omakei-ledger.json` is persisted compactly, through a temp file and a rename anchored to the destination directory's descriptor. Statement merges are batched in one pass, without yielding to the UI between files.
+- The ledger is `omakei-ledger.sqlite`, and every write is one SQLite transaction that checks and bumps a revision, so the server and `omakei-categorize.mjs` cannot overwrite each other. A save replaces every row: ~7ms at today's 1.4k transactions, ~120ms at 30k. It has no secondary indexes because they doubled that. The old `omakei-ledger.json` is imported once and never written again. Statement merges are batched in one pass, without yielding to the UI between files.
 
 ## Data
 
-- Personal statements and `omakei-ledger.json` are gitignored, and are never committed.
+- Personal statements and the ledger (`omakei-ledger.sqlite` and its journal files, and the old `omakei-ledger.json`) are gitignored, and are never committed.
 - `scripts/check-no-personal-data.mjs` reads staged content in the pre-commit hook and every tracked file in `npm test`. It catches data with a recognisable shape — card numbers, SSNs, routing and account numbers, IBANs, real email addresses, personal phone numbers, street addresses. It **cannot** tell that a merchant, a balance, or a name is yours; that judgement is the rule below, and review is what enforces it. A clean run is one guard passing, not proof the diff is safe.
 - For household-specific words, put them one per line in `.githooks/personal-terms`, which is gitignored — a committed block list would itself be the leak. Matches are reported as `[redacted]`.
 - A line that must keep a matching string carries `omakei:allow-personal`, on that line or the one above it. It exists for something like a merchant's public support number, not to silence a real hit.
