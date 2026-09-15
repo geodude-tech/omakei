@@ -68,6 +68,7 @@ const LEDGER = {
     tx("t3", "2026-08-05", "PAYROLL DEPOSIT", 2400, "income"),
     tx("t4", "2026-08-06", "ONLINE PAYMENT THANK YOU", -600, "transfers"),
     tx("t5", "2026-08-07", "SQ *FARMERS MARKET", -18.5, null),
+    { ...tx("t6", "2026-08-09", "CHECK 1042", -120, "childcare"), pinnedCategoryId: "childcare" },
   ],
   rules: [{ id: "r1", pattern: "starbucks", categoryId: "coffee", createdAt: 1724800000000, source: "user" }],
   setAsides: [{ id: "s1", name: "Taxes", amount: 500 }],
@@ -259,4 +260,61 @@ test("a SQLite file that is not an Omakei ledger is not read", async () => {
   const tables = after.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
   after.close();
   assert.deepEqual(tables, ["something"]);
+});
+
+/* --------------------------------------------------------------- pins */
+
+test("a pin round-trips, and a row without one reads back with no pin key at all", async () => {
+  const dir = folder();
+  await write(dir, LEDGER);
+  const { ledger } = await readLedgerDb(dir);
+  const pinned = ledger.transactions.find((t) => t.id === "t6");
+  assert.equal(pinned.pinnedCategoryId, "childcare");
+  const plain = ledger.transactions.find((t) => t.id === "t1");
+  assert.equal("pinnedCategoryId" in plain, false, "absent, not null");
+});
+
+test("pins in a JSON ledger survive the import", async () => {
+  const dir = folder();
+  writeFileSync(join(dir, LEDGER_FILENAME), JSON.stringify(LEDGER));
+  const { ledger } = await readLedgerDb(dir, { importJson: true });
+  assert.deepEqual(ledger, LEDGER);
+});
+
+test("a field the ledger has no column for is refused rather than dropped", async () => {
+  const dir = folder();
+  const saved = await write(dir, LEDGER);
+  const withNew = { ...LEDGER, transactions: [{ ...LEDGER.transactions[0], someNewField: "x" }] };
+  await assert.rejects(write(dir, withNew), /someNewField/);
+  await assert.rejects(write(dir, { ...LEDGER, somethingElse: 1 }), /somethingElse/);
+  await assert.rejects(
+    write(dir, { ...LEDGER, setAsides: [{ id: "s", name: "Taxes", amount: 1, note: "x" }] }),
+    /note/,
+  );
+  assert.equal((await readLedgerDb(dir)).etag, saved.etag);
+
+  const jsonDir = folder();
+  writeFileSync(join(jsonDir, LEDGER_FILENAME), JSON.stringify(withNew));
+  await assert.rejects(importJsonLedger(jsonDir), LedgerShapeError);
+  assert.equal(existsSync(join(jsonDir, DB_FILENAME)), false, "a lossy import is not published");
+});
+
+test("a rule on a bare check cannot be stored, however it is written", async () => {
+  const dir = folder();
+  const saved = await write(dir, LEDGER);
+  for (const pattern of ["check", " CHECK ", "Chk"]) {
+    const rules = [{ id: "rc", pattern, categoryId: "childcare", createdAt: 1, source: "user" }];
+    await assert.rejects(write(dir, { ...LEDGER, rules }), LedgerShapeError, pattern);
+  }
+  assert.equal((await readLedgerDb(dir)).etag, saved.etag);
+
+  // An agent going around the app, straight into the table.
+  const db = new DatabaseSync(join(dir, DB_FILENAME));
+  assert.throws(
+    () => db.prepare("INSERT INTO rules (pattern, categoryId, source) VALUES ('check', 'childcare', 'user')").run(),
+    /no_rule_on_a_bare_check/,
+  );
+  // A real merchant that merely contains the word is fine.
+  db.prepare("INSERT INTO rules (pattern, categoryId, source) VALUES ('checkers', 'dining', 'user')").run();
+  db.close();
 });
