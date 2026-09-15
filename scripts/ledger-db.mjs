@@ -59,9 +59,19 @@ const TX_COLUMNS = [
   "fingerprint",
   "categoryId",
   "importedAt",
+  "pinnedCategoryId",
 ];
 const RULE_COLUMNS = ["id", "pattern", "categoryId", "createdAt", "source"];
 const SET_ASIDE_COLUMNS = ["id", "name", "amount"];
+
+/**
+ * Keys a row may leave out entirely. Absent on almost every transaction, so a
+ * NULL here reads back as no key at all rather than `pinnedCategoryId: null`,
+ * and a snapshot round-trips to exactly the shape it was written in.
+ */
+const OPTIONAL_KEYS = new Set(["pinnedCategoryId"]);
+
+const SNAPSHOT_KEYS = new Set(["version", "savedAt", "selectedMonth", "transactions", "rules", "setAsides"]);
 
 /**
  * Column names are the JSON contract's names, so an agent that learned the
@@ -88,7 +98,10 @@ CREATE TABLE IF NOT EXISTS transactions (
   sourceFile  TEXT,
   fingerprint TEXT,
   categoryId  TEXT,
-  importedAt  INTEGER
+  importedAt  INTEGER,
+  -- Chosen by hand for this one transaction; wins over every rule. NULL on
+  -- almost every row. See pinCategory in src/lib/finance/ledger.ts.
+  pinnedCategoryId TEXT
 );
 CREATE TABLE IF NOT EXISTS rules (
   seq        INTEGER PRIMARY KEY,
@@ -96,7 +109,12 @@ CREATE TABLE IF NOT EXISTS rules (
   pattern    TEXT,
   categoryId TEXT,
   createdAt  INTEGER,
-  source     TEXT
+  source     TEXT,
+  -- A paper check's bank line is just "CHECK", so a rule on it would give
+  -- every future check the last one's category. Checks are pinned instead.
+  -- The engine already refuses to apply such a rule (ruleApplies); this makes
+  -- writing one straight into the table fail rather than sit there inert.
+  CONSTRAINT no_rule_on_a_bare_check CHECK (lower(trim(pattern)) NOT IN ('check', 'chk'))
 );
 CREATE TABLE IF NOT EXISTS setAsides (
   seq    INTEGER PRIMARY KEY,
@@ -283,15 +301,20 @@ function rowsOf(db, table, columns) {
   // Arrays skip building a null-prototype object per row that would only be
   // copied into a plain one; a quarter of the read at 30k rows. Older Node
   // lacks the switch and gets the objects.
+  const toRow = (valueAt) => {
+    const row = {};
+    for (let i = 0; i < columns.length; i++) {
+      const value = valueAt(i) ?? null;
+      if (value === null && OPTIONAL_KEYS.has(columns[i])) continue;
+      row[columns[i]] = value;
+    }
+    return row;
+  };
   if (typeof statement.setReturnArrays === "function") {
     statement.setReturnArrays(true);
-    return statement.all().map((values) => {
-      const row = {};
-      for (let i = 0; i < columns.length; i++) row[columns[i]] = values[i] ?? null;
-      return row;
-    });
+    return statement.all().map((values) => toRow((i) => values[i]));
   }
-  return statement.all().map((row) => Object.fromEntries(columns.map((c) => [c, row[c] ?? null])));
+  return statement.all().map((row) => toRow((i) => row[columns[i]]));
 }
 
 /** The ledger in the JSON snapshot shape, or null when nothing has been written. */
@@ -325,8 +348,16 @@ function insertAll(db, table, columns, items, label) {
   const insert = db.prepare(
     `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
   );
+  const known = new Set(columns);
   for (const item of items) {
     if (!isRecord(item)) throw new LedgerShapeError(`A ${label} entry is not an object`);
+    // A key with no column would be dropped on the floor, and nothing would
+    // notice until the data was gone: that is how a new field like
+    // `pinnedCategoryId` gets lost. Refuse the snapshot instead, so adding a
+    // field without adding its column fails the first save and every test.
+    for (const key of Object.keys(item)) {
+      if (!known.has(key)) throw new LedgerShapeError(`A ${label} has a field the ledger does not store: ${key}`);
+    }
     insert.run(...columns.map((c) => bindable(item[c])));
   }
 }
@@ -334,6 +365,9 @@ function insertAll(db, table, columns, items, label) {
 /** Replace every row with `ledger`'s, bump the revision. Call inside a write transaction. */
 function replaceSnapshot(db, ledger) {
   if (!isLedgerPayload(ledger)) throw new LedgerShapeError("Invalid ledger");
+  for (const key of Object.keys(ledger)) {
+    if (!SNAPSHOT_KEYS.has(key)) throw new LedgerShapeError(`The ledger has a field it does not store: ${key}`);
+  }
   for (const tx of ledger.transactions) {
     if (!isRecord(tx) || typeof tx.id !== "string") {
       throw new LedgerShapeError("Every transaction needs a string id");
@@ -348,7 +382,14 @@ function replaceSnapshot(db, ledger) {
     }
     throw err;
   }
-  insertAll(db, "rules", RULE_COLUMNS, ledger.rules, "rule");
+  try {
+    insertAll(db, "rules", RULE_COLUMNS, ledger.rules, "rule");
+  } catch (err) {
+    if (String(err?.message).includes("no_rule_on_a_bare_check")) {
+      throw new LedgerShapeError("A rule on a bare check cannot be stored; checks are pinned, not ruled");
+    }
+    throw err;
+  }
   insertAll(db, "setAsides", SET_ASIDE_COLUMNS, ledger.setAsides, "set-aside");
   setMeta(db, "savedAt", typeof ledger.savedAt === "string" ? ledger.savedAt : new Date().toISOString());
   setMeta(db, "selectedMonth", typeof ledger.selectedMonth === "string" ? ledger.selectedMonth : "");
