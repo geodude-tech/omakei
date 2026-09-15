@@ -38,6 +38,7 @@ import {
   ledgerEtag,
   readCapped,
 } from "./ledger-api.mjs";
+import { CATEGORIES, TRANSFER_CATEGORY } from "../src/lib/finance/categories.ts";
 
 export { DB_FILENAME };
 export const SCHEMA_VERSION = 2;
@@ -123,6 +124,39 @@ CREATE TABLE IF NOT EXISTS setAsides (
   amount REAL
 );
 `;
+
+/**
+ * What makes a query over the ledger right, kept in the file instead of only in
+ * `docs/ledger.md`. The views are the dashboard's rules, not a second version
+ * of them: `spend` is `isSpend`, `income` is `isIncome` (src/lib/finance/
+ * ledger.ts), and a test holds them to it row for row.
+ *
+ * - Transfers are neither spend nor income. `IS NOT` rather than `!=`, so an
+ *   uncategorized row (NULL) still counts -- it is real money.
+ * - `categories` carries the names, which otherwise ship only in the build.
+ *
+ * Refreshed inside every write, so the names track the build that last saved.
+ */
+const DERIVED = `
+CREATE TABLE IF NOT EXISTS categories (
+  id      TEXT PRIMARY KEY,
+  name    TEXT NOT NULL,
+  "group" TEXT NOT NULL
+);
+CREATE VIEW IF NOT EXISTS spend AS
+  SELECT * FROM transactions WHERE amount < 0 AND categoryId IS NOT '${TRANSFER_CATEGORY}';
+CREATE VIEW IF NOT EXISTS income AS
+  SELECT * FROM transactions WHERE amount > 0 AND categoryId IS NOT '${TRANSFER_CATEGORY}';
+CREATE VIEW IF NOT EXISTS uncategorized AS
+  SELECT * FROM transactions WHERE categoryId IS NULL;
+`;
+
+function refreshDerived(db) {
+  db.exec(DERIVED);
+  db.exec("DELETE FROM categories");
+  const insert = db.prepare('INSERT INTO categories (id, name, "group") VALUES (?, ?, ?)');
+  for (const c of CATEGORIES) insert.run(c.id, c.name, c.group);
+}
 
 /** A snapshot that cannot be stored as given: the server answers 400, not 500. */
 export class LedgerShapeError extends Error {}
@@ -393,6 +427,7 @@ function replaceSnapshot(db, ledger) {
   insertAll(db, "setAsides", SET_ASIDE_COLUMNS, ledger.setAsides, "set-aside");
   setMeta(db, "savedAt", typeof ledger.savedAt === "string" ? ledger.savedAt : new Date().toISOString());
   setMeta(db, "selectedMonth", typeof ledger.selectedMonth === "string" ? ledger.selectedMonth : "");
+  refreshDerived(db);
   setMeta(db, "revision", (getMeta(db, "revision") ?? 0) + 1);
 }
 
