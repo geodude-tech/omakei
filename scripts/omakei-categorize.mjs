@@ -8,6 +8,13 @@
  *   omakei-categorize.mjs --list                       merchants with no category yet
  *   omakei-categorize.mjs --list --json                the same list, as JSON
  *   omakei-categorize.mjs --dry-run <pattern> <id>     show what would change, write nothing
+ *   omakei-categorize.mjs --pin <transaction-id> <id>  categorize one transaction by hand
+ *
+ * A paper check's bank line is just "CHECK", so a rule on it would give every
+ * future check the last one's category. `CHECK <id>` therefore writes no rule:
+ * it pins the checks that have no category yet, and next month's check arrives
+ * uncategorized again. `--pin` does the same for one transaction by its `id`,
+ * for when the outstanding checks paid different people.
  *
  * A <pattern> is a key identifier ("safeway"), not the whole bank line, matched
  * the way the app matches: case-insensitive, town and store number ignored.
@@ -39,7 +46,14 @@ import {
   writeAtomic,
 } from "./ledger-api.mjs";
 import { CATEGORIES } from "../src/lib/finance/categories.ts";
-import { refreshCategories, seedRules, upsertRule } from "../src/lib/finance/ledger.ts";
+import {
+  isGenericMerchant,
+  pinCategory,
+  refreshCategories,
+  seedRules,
+  uncategorizedIdsFor,
+  upsertRule,
+} from "../src/lib/finance/ledger.ts";
 import { uncategorizedMerchants } from "../src/lib/finance/uncategorized.ts";
 
 const CATEGORY_IDS = CATEGORIES.map((c) => c.id);
@@ -124,6 +138,7 @@ async function attempt(argv, { env = process.env, home = homedir() } = {}) {
   const json = takeFlag(args, "--json");
   const dryRun = takeFlag(args, "--dry-run");
   const remove = takeFlag(args, "--remove");
+  const pin = takeFlag(args, "--pin");
 
   if (json && !list) return fail("--json only applies to --list.");
 
@@ -187,11 +202,30 @@ async function attempt(argv, { env = process.env, home = homedir() } = {}) {
 
   if (!pattern || !categoryId) {
     return fail(
-      "Usage: omakei-categorize.mjs <pattern> <category-id>  (also --list [--json], --remove, --dry-run)",
+      "Usage: omakei-categorize.mjs <pattern> <category-id>  (also --list [--json], --remove, --pin, --dry-run)",
     );
   }
   if (!CATEGORY_IDS.includes(categoryId)) {
     return fail(`Unknown category "${categoryId}". One of: ${CATEGORY_IDS.join(", ")}`);
+  }
+
+  if (pin || isGenericMerchant(pattern)) {
+    const ids = pin
+      ? new Set(snapshot.transactions.some((t) => t?.id === pattern) ? [pattern] : [])
+      : uncategorizedIdsFor(before, pattern);
+    if (ids.size === 0) {
+      return fail(
+        pin
+          ? `No transaction has id "${pattern}".`
+          : `Nothing under "${pattern.trim()}" needs a category. Use --pin <transaction-id> to change one.`,
+      );
+    }
+    return commit({
+      env, home, path, snapshot, users, readEtag,
+      after: derive(pinCategory(before, ids, categoryId), users),
+      before, dryRun,
+      note: `Pinned ${ids.size} transaction${ids.size === 1 ? "" : "s"} → ${categoryId} (no rule written)`,
+    });
   }
 
   const nextUsers = upsertRule(users, pattern, categoryId);

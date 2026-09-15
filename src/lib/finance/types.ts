@@ -19,6 +19,13 @@ export interface Transaction {
   fingerprint: string;
   categoryId: string | null;
   importedAt: number;
+  /**
+   * A category the user chose for this one transaction. It is stored state,
+   * not derived: `refreshCategories` copies it into `categoryId` and never
+   * overrides it, and transfer pairing leaves the row alone. Absent on almost
+   * every row — rules are how categories are normally set.
+   */
+  pinnedCategoryId?: string;
 }
 
 export interface CategorizeRule {

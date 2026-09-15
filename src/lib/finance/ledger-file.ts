@@ -71,13 +71,15 @@ export function parseLedgerData(raw: unknown): LedgerSnapshot | null {
  * away the edit that was refused.
  *
  * It works because a category is not stored state — it is a function of
- * transactions and rules, re-derived on every load and on every import. So only
- * three things actually have to be reconciled:
+ * transactions, rules, and the odd per-transaction pin, re-derived on every
+ * load and on every import. So only three things actually have to be
+ * reconciled:
  *
  * - **Transactions** merge by `id`, which already encodes file, fingerprint,
  *   and occurrence, so the same bank line imported twice is the same id. Ours
  *   wins a tie only to keep the object we already hold; the fields that differ
- *   are derived ones, and they are recomputed below anyway.
+ *   are derived ones, and they are recomputed below anyway. The exception is
+ *   `pinnedCategoryId`, which is kept from whichever side has one.
  * - **User rules** merge by pattern, newest `createdAt` winning, which is the
  *   same rule `upsertRule` follows when one person edits twice.
  * - **Set-asides and the selected month** are ours. Nothing else writes them:
@@ -92,7 +94,14 @@ export function parseLedgerData(raw: unknown): LedgerSnapshot | null {
 export function mergeSnapshots(mine: LedgerSnapshot, theirs: LedgerSnapshot): LedgerSnapshot {
   const byId = new Map<string, Transaction>();
   for (const tx of theirs.transactions) byId.set(tx.id, tx);
-  for (const tx of mine.transactions) byId.set(tx.id, tx);
+  for (const tx of mine.transactions) {
+    // A pin is stored, not derived, so it is the one field that can differ for
+    // a real reason. Keep theirs when ours has none — the CLI pinned it while
+    // this tab was open.
+    const held = byId.get(tx.id);
+    const pin = tx.pinnedCategoryId ?? held?.pinnedCategoryId;
+    byId.set(tx.id, pin ? { ...tx, pinnedCategoryId: pin } : tx);
+  }
 
   const byPattern = new Map<string, CategorizeRule>();
   for (const rule of [...theirs.rules, ...mine.rules]) {

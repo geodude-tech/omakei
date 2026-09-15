@@ -1,6 +1,14 @@
 import { create } from "zustand";
 import { extractMerchant } from "./fingerprint.ts";
-import { mergeImport, refreshCategories, seedRules, upsertRule } from "./ledger.ts";
+import {
+  isGenericMerchant,
+  mergeImport,
+  pinCategory,
+  refreshCategories,
+  seedRules,
+  uncategorizedIdsFor,
+  upsertRule,
+} from "./ledger.ts";
 import { scheduleLedgerSave } from "./ledger-file.ts";
 import { makeSetAside, parseSetAsides } from "./set-asides.ts";
 import type {
@@ -84,6 +92,11 @@ export const useLedgerStore = create<LedgerState>()((set, get) => ({
   },
 
   categorizeMerchant: (merchant, categoryId) => {
+    if (isGenericMerchant(merchant)) {
+      const ids = uncategorizedIdsFor(get().transactions, merchant);
+      set({ transactions: pinCategory(get().transactions, ids, categoryId) });
+      return;
+    }
     const rules = upsertRule(get().rules, merchant.trim(), categoryId);
     set({ rules, transactions: refreshCategories(get().transactions, rules) });
   },
@@ -91,13 +104,14 @@ export const useLedgerStore = create<LedgerState>()((set, get) => ({
   categorizeOne: (id, categoryId, always) => {
     const tx = get().transactions.find((t) => t.id === id);
     if (!tx) return;
-    if (!always) {
-      set({
-        transactions: get().transactions.map((t) => (t.id === id ? { ...t, categoryId } : t)),
-      });
+    const merchant = extractMerchant(tx.description);
+    // "Always" means a rule, and a rule on a check would categorize every
+    // future check the same way. Pin this one instead.
+    if (!always || isGenericMerchant(merchant)) {
+      set({ transactions: pinCategory(get().transactions, new Set([id]), categoryId) });
       return;
     }
-    const rules = upsertRule(get().rules, extractMerchant(tx.description), categoryId);
+    const rules = upsertRule(get().rules, merchant, categoryId);
     set({ rules, transactions: refreshCategories(get().transactions, rules) });
   },
 

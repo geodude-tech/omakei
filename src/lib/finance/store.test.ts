@@ -64,3 +64,48 @@ test("loadSnapshot with no stored rules falls back to the defaults", () => {
   });
   assert.equal(useLedgerStore.getState().transactions[0]!.categoryId, "coffee");
 });
+
+test("categorizing CHECK pins the outstanding checks and writes no rule", () => {
+  useLedgerStore.getState().loadSnapshot({
+    transactions: [tx("c1", "CHECK", null), tx("c2", "CHECK", null)],
+    rules: snapshotRules(),
+    selectedMonth: "2026-08",
+  });
+  const rulesBefore = useLedgerStore.getState().rules.length;
+  useLedgerStore.getState().categorizeMerchant("CHECK", "childcare");
+
+  const state = useLedgerStore.getState();
+  assert.equal(state.rules.length, rulesBefore, "no rule for a check");
+  assert.deepEqual(
+    state.transactions.map((t) => [t.id, t.categoryId, t.pinnedCategoryId]),
+    [
+      ["c1", "childcare", "childcare"],
+      ["c2", "childcare", "childcare"],
+    ],
+  );
+
+  // Reloading — what every sync and every tab open does — keeps the pins and
+  // leaves a new check uncategorized.
+  useLedgerStore.getState().loadSnapshot({
+    transactions: [...state.transactions, tx("c3", "CHECK", null)],
+    rules: state.rules,
+    selectedMonth: "2026-08",
+  });
+  assert.deepEqual(
+    useLedgerStore.getState().transactions.map((t) => t.categoryId),
+    ["childcare", "childcare", null],
+  );
+});
+
+test("categorizeOne on a check pins it even when asked to always apply", () => {
+  useLedgerStore.getState().loadSnapshot({
+    transactions: [tx("c1", "CHECK 1042", null), tx("c2", "CHECK 1043", null)],
+    rules: snapshotRules(),
+    selectedMonth: "2026-08",
+  });
+  useLedgerStore.getState().categorizeOne("c1", "childcare", true);
+  assert.deepEqual(
+    useLedgerStore.getState().transactions.map((t) => t.categoryId),
+    ["childcare", null],
+  );
+});
