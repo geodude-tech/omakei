@@ -105,8 +105,16 @@ function isPairableCredit(tx: Transaction): boolean {
   return tx.accountKind === "credit" && (CARD_PAYMENT.test(d) || tx.amount > 0);
 }
 
+/**
+ * A known payment posting, or an outgoing row no pattern recognizes: some
+ * servicers label the payment with only their own name. Pairing with a checking
+ * withdrawal of the same cents is what makes the unrecognized one Housing.
+ * Escrow and fees are recognized, so they never pair.
+ */
 function isPairableMortgagePayment(tx: Transaction): boolean {
-  return tx.accountKind === "mortgage" && mortgageCategory(tx.description) === HOUSING_CATEGORY;
+  if (tx.accountKind !== "mortgage") return false;
+  const category = mortgageCategory(tx.description);
+  return category === HOUSING_CATEGORY || (category === null && tx.amount < 0);
 }
 
 function isBankAccount(tx: Transaction): boolean {

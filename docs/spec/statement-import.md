@@ -203,8 +203,12 @@ unreadable file is skipped, not fatal.
 `applyTransferCategories` tags structurally-obvious transfers, then
 `pairInternalTransfers` and `pairSameBankMoves` match opposite legs by equal
 cents within 3–5 days across different accounts, marking both `transfers` (a
-mortgage-payment destination becomes `housing` instead). User rules on either leg
-veto the pairing.
+mortgage-payment destination becomes `housing` instead). A mortgage row no
+pattern recognizes — a servicer that labels the payment with only its own name —
+is still a destination when it is outgoing, so the matching checking withdrawal
+is what makes it `housing`; unpaired, it stays `null`. User rules on either leg
+veto the pairing: a rule on the servicer's name also matches the checking
+withdrawal and counts the payment twice, so don't write one.
 
 ## Testing Strategy
 
