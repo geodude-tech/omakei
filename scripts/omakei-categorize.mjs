@@ -18,37 +18,37 @@
  * the shipped engine, the ledger is rewritten, and the bar's revision file is
  * bumped.
  *
- * Safe to run with the editor open. It used to not be: an open tab held the
- * ledger in memory and reinstated it on its next save, so a rule added here
- * vanished without anything reporting it. Now a save carries the version it was
- * derived from and is refused if the file has moved on, and this command
- * re-checks immediately before writing and retries if it lost. The editor picks
- * the change up on its next save; reload the tab to see it sooner.
+ * Safe to run with the editor open. The read, the re-categorize, and the write
+ * are one SQLite transaction, so nothing -- the editor's server included -- can
+ * write in between. The editor's next save is derived from the version before
+ * this one, so the server refuses it and the editor merges this rule in; reload
+ * the tab to see it sooner.
+ *
+ * A folder that still holds only `omakei-ledger.json` is imported into
+ * `omakei-ledger.sqlite` the first time this runs. The JSON is not written.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   bumpRevisionAt,
-  ledgerEtag,
+  DB_FILENAME,
   LEDGER_FILENAME,
-  MAX_LEDGER_BYTES,
   MAX_STATE_BYTES,
   parseStateFile,
   readCapped,
   stateDirFor,
-  writeAtomic,
 } from "./ledger-api.mjs";
+import { jsonChangedSinceImport, readLedgerDb, updateLedgerDb } from "./ledger-db.mjs";
 import { CATEGORIES } from "../src/lib/finance/categories.ts";
 import { refreshCategories, seedRules, upsertRule } from "../src/lib/finance/ledger.ts";
 import { uncategorizedMerchants } from "../src/lib/finance/uncategorized.ts";
 
 const CATEGORY_IDS = CATEGORIES.map((c) => c.id);
 
-async function resolveLedgerPath(env, home) {
+async function resolveStatementsDir(env, home) {
   const raw = await readCapped(join(stateDirFor(env, home), "state.json"), MAX_STATE_BYTES);
   if (!raw) return "";
-  const state = parseStateFile(raw.toString("utf8"));
-  return state ? join(state.statementsDir, LEDGER_FILENAME) : "";
+  return parseStateFile(raw.toString("utf8"))?.statementsDir ?? "";
 }
 
 /** The user's own rules, as they sit on disk (the defaults are not persisted). */
@@ -75,17 +75,6 @@ function money(n) {
   return `${n < 0 ? "-" : "+"}$${Math.abs(n).toFixed(2)}`;
 }
 
-function serialize(snapshot, transactions, users) {
-  return `${JSON.stringify({
-    version: 1,
-    savedAt: new Date().toISOString(),
-    selectedMonth: typeof snapshot.selectedMonth === "string" ? snapshot.selectedMonth : "",
-    transactions,
-    rules: users,
-    setAsides: Array.isArray(snapshot.setAsides) ? snapshot.setAsides : [],
-  })}\n`;
-}
-
 function fail(message) {
   process.stderr.write(`${message}\n`);
   return 1;
@@ -98,128 +87,121 @@ function takeFlag(args, flag) {
   return true;
 }
 
-/** Signals that the file moved under us between the read and the write. */
-const STALE = Symbol("stale");
-
-/**
- * The editor writes this same file, so a read here can be out of date by the
- * time the write lands. Re-read and re-apply rather than overwrite: the whole
- * operation is a rule upsert on the current contents, so redoing it against
- * fresh contents is the same request, correctly answered.
- *
- * Three attempts, then give up rather than spin. Losing three times in a row
- * means something is writing continuously, and the honest answer is to say so.
- */
-export async function run(argv, options = {}) {
-  for (let i = 0; i < 3; i++) {
-    const result = await attempt(argv, options);
-    if (result !== STALE) return result;
-  }
-  return fail("The ledger kept changing while this ran. Close the editor and try again.");
-}
-
-async function attempt(argv, { env = process.env, home = homedir() } = {}) {
+export async function run(argv, { env = process.env, home = homedir() } = {}) {
   const args = [...argv];
   const list = takeFlag(args, "--list");
   const json = takeFlag(args, "--json");
   const dryRun = takeFlag(args, "--dry-run");
   const remove = takeFlag(args, "--remove");
-
-  if (json && !list) return fail("--json only applies to --list.");
-
-  const path = await resolveLedgerPath(env, home);
-  if (!path) return fail("No ledger found. Attach a folder in the editor first.");
-
-  const raw = await readCapped(path, MAX_LEDGER_BYTES);
-  if (!raw) return fail(`Could not read ${path}`);
-  const readEtag = ledgerEtag(raw);
-
-  let snapshot;
-  try {
-    snapshot = JSON.parse(raw.toString("utf8"));
-  } catch {
-    return fail(`${path} is not valid JSON`);
-  }
-  if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.transactions)) {
-    return fail(`${path} is not an Omakei ledger`);
-  }
-
-  const users = userRules(snapshot);
-  const before = derive(snapshot.transactions, users);
-
-  if (list) {
-    const rows = uncategorizedMerchants(before);
-    // `--json` is for a caller that is going to do something with the answer
-    // rather than read it: an agent picking merchants to write rules for. The
-    // empty case is an empty array, not a sentence.
-    if (json) {
-      process.stdout.write(`${JSON.stringify(rows)}\n`);
-      return 0;
-    }
-    if (rows.length === 0) {
-      process.stdout.write("Nothing uncategorized.\n");
-      return 0;
-    }
-    const width = Math.max(...rows.map((r) => r.merchant.length));
-    for (const r of rows) {
-      process.stdout.write(
-        `${r.merchant.padEnd(width)}  ${String(r.count).padStart(4)}  ${money(r.total)}\n`,
-      );
-    }
-    return 0;
-  }
-
   const [pattern, categoryId] = args;
 
-  if (remove) {
-    if (!pattern) return fail("Usage: omakei-categorize.mjs --remove <pattern>");
-    const needle = pattern.trim().toLowerCase();
-    const nextUsers = users.filter((r) => r.pattern.trim().toLowerCase() !== needle);
-    if (nextUsers.length === users.length) {
-      return fail(`No user rule matches "${pattern}".`);
+  // Everything that can be wrong with the command is refused before the
+  // ledger is opened, so a mistyped command cannot so much as import it.
+  if (json && !list) return fail("--json only applies to --list.");
+  if (!list && remove && !pattern) return fail("Usage: omakei-categorize.mjs --remove <pattern>");
+  if (!list && !remove) {
+    if (!pattern || !categoryId) {
+      return fail(
+        "Usage: omakei-categorize.mjs <pattern> <category-id>  (also --list [--json], --remove, --dry-run)",
+      );
     }
-    return commit({
-      env, home, path, snapshot, users: nextUsers, readEtag,
-      after: derive(snapshot.transactions, nextUsers),
-      before, dryRun, note: `Removed rule "${pattern.trim()}"`,
-    });
+    if (!CATEGORY_IDS.includes(categoryId)) {
+      return fail(`Unknown category "${categoryId}". One of: ${CATEGORY_IDS.join(", ")}`);
+    }
   }
 
-  if (!pattern || !categoryId) {
-    return fail(
-      "Usage: omakei-categorize.mjs <pattern> <category-id>  (also --list [--json], --remove, --dry-run)",
-    );
-  }
-  if (!CATEGORY_IDS.includes(categoryId)) {
-    return fail(`Unknown category "${categoryId}". One of: ${CATEGORY_IDS.join(", ")}`);
+  const dir = await resolveStatementsDir(env, home);
+  if (!dir) return fail("No ledger found. Attach a folder in the editor first.");
+  const path = join(dir, DB_FILENAME);
+
+  if (list) {
+    const found = await readLedgerDb(dir, { importJson: true });
+    if (!found?.ledger) return fail(`Could not read ${path}`);
+    await warnIfJsonChanged(dir);
+    return printList(derive(found.ledger.transactions, userRules(found.ledger)), json);
   }
 
-  const nextUsers = upsertRule(users, pattern, categoryId);
-  return commit({
-    env, home, path, snapshot, users: nextUsers, readEtag,
-    after: derive(snapshot.transactions, nextUsers),
-    before, dryRun, note: `Rule "${pattern.trim()}" → ${categoryId}`,
-  });
+  // The decision runs inside the write lock, against the ledger as it is at
+  // that moment. There is no earlier read for it to be stale against.
+  let outcome;
+  const result = await updateLedgerDb(
+    dir,
+    ({ ledger }) => {
+      if (!ledger) return null;
+      const users = userRules(ledger);
+      let nextUsers;
+      let note;
+      if (remove) {
+        const needle = pattern.trim().toLowerCase();
+        nextUsers = users.filter((r) => r.pattern.trim().toLowerCase() !== needle);
+        if (nextUsers.length === users.length) {
+          outcome = { error: `No user rule matches "${pattern}".` };
+          return null;
+        }
+        note = `Removed rule "${pattern.trim()}"`;
+      } else {
+        nextUsers = upsertRule(users, pattern, categoryId);
+        note = `Rule "${pattern.trim()}" → ${categoryId}`;
+      }
+      const before = derive(ledger.transactions, users);
+      const after = derive(ledger.transactions, nextUsers);
+      outcome = { note, before, after };
+      if (dryRun) return null;
+      return {
+        version: 1,
+        savedAt: new Date().toISOString(),
+        selectedMonth: typeof ledger.selectedMonth === "string" ? ledger.selectedMonth : "",
+        transactions: after,
+        rules: nextUsers,
+        setAsides: Array.isArray(ledger.setAsides) ? ledger.setAsides : [],
+      };
+    },
+    { create: false },
+  );
+
+  if (!result?.ledger && !outcome) return fail(`Could not read ${path}`);
+  await warnIfJsonChanged(dir);
+  if (outcome.error) return fail(outcome.error);
+  if (result.written) await bumpRevisionAt(stateDirFor(env, home));
+  report(outcome.note, outcome.before, outcome.after);
+  if (dryRun) process.stdout.write("(dry run — nothing written)\n");
+  return 0;
 }
 
-async function commit({ env, home, path, snapshot, users, after, before, dryRun, note, readEtag }) {
-  if (dryRun) {
-    report(note, before, after);
-    process.stdout.write("(dry run — nothing written)\n");
+function printList(transactions, json) {
+  const rows = uncategorizedMerchants(transactions);
+  // `--json` is for a caller that is going to do something with the answer
+  // rather than read it: an agent picking merchants to write rules for. The
+  // empty case is an empty array, not a sentence.
+  if (json) {
+    process.stdout.write(`${JSON.stringify(rows)}\n`);
     return 0;
   }
-
-  // Last look before writing. This does not lock the file — nothing here can —
-  // so it narrows the window rather than closing it. What it does remove is the
-  // long one: a rule computed against a ledger the editor replaced while
-  // someone was reading the `--list` output and deciding.
-  const current = await readCapped(path, MAX_LEDGER_BYTES);
-  if (ledgerEtag(current) !== readEtag) return STALE;
-
-  await writeAtomic(path, serialize(snapshot, after, users));
-  await bumpRevisionAt(stateDirFor(env, home));
-  report(note, before, after);
+  if (rows.length === 0) {
+    process.stdout.write("Nothing uncategorized.\n");
+    return 0;
+  }
+  const width = Math.max(...rows.map((r) => r.merchant.length));
+  for (const r of rows) {
+    process.stdout.write(
+      `${r.merchant.padEnd(width)}  ${String(r.count).padStart(4)}  ${money(r.total)}\n`,
+    );
+  }
   return 0;
+}
+
+/**
+ * The ledger is the database now, so a rule written to the old JSON by an
+ * out-of-date copy of this command is not in it. Say so on stderr, where it
+ * does not disturb `--list --json`.
+ */
+async function warnIfJsonChanged(dir) {
+  if (await jsonChangedSinceImport(dir)) {
+    process.stderr.write(
+      `warning: ${join(dir, LEDGER_FILENAME)} changed after it was imported; ` +
+        `those changes are not in ${join(dir, DB_FILENAME)}\n`,
+    );
+  }
 }
 
 function report(note, before, after) {
