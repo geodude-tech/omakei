@@ -76,6 +76,41 @@ test("pairing keeps the mortgage payment as Housing, not a second transfer", () 
   assert.equal(rows.find((r) => r.id === "mtg")?.categoryId, HOUSING_CATEGORY);
 });
 
+test("a posting that only names the lender is Housing once checking pays it", () => {
+  // Some servicers label the payment with nothing but their own name, which no
+  // pattern can know. The checking withdrawal of the same cents is the proof.
+  const rows = refreshCategories(
+    [
+      tx({
+        id: "ck",
+        date: "2026-08-03",
+        description: "NORTHGATE BANK   CK-WTH        ACH",
+        amount: -1800,
+        accountKind: "checking",
+      }),
+      tx({
+        id: "mtg",
+        date: "2026-08-03",
+        description: "Northgate",
+        amount: -1800,
+        accountKind: "mortgage",
+      }),
+      tx({
+        id: "unpaid",
+        date: "2026-09-03",
+        description: "Northgate",
+        amount: -1800,
+        accountKind: "mortgage",
+      }),
+    ],
+    seedRules(),
+  );
+  assert.equal(rows.find((r) => r.id === "ck")?.categoryId, TRANSFER_CATEGORY);
+  assert.equal(rows.find((r) => r.id === "mtg")?.categoryId, HOUSING_CATEGORY);
+  // Nothing in checking paid this one, so it waits for a person.
+  assert.equal(rows.find((r) => r.id === "unpaid")?.categoryId, null);
+});
+
 test("same-bank WWW FM/TO pair is a transfer on both legs", () => {
   const rows = applyTransferCategories(
     [
