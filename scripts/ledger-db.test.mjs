@@ -405,3 +405,14 @@ test("every SQL example in docs/ledger.md runs against a real ledger, and the wo
   const setAsides = LEDGER.setAsides.reduce((a, s) => a + s.amount, 0);
   assert.equal(Math.round(row.net * 100), Math.round((income - spend - setAsides) * 100));
 });
+
+test("a new database, written or imported, is readable by its owner only", async () => {
+  const written = folder();
+  await write(written, LEDGER);
+  assert.equal(statSync(join(written, DB_FILENAME)).mode & 0o777, 0o600);
+
+  const imported = folder();
+  writeFileSync(join(imported, LEDGER_FILENAME), JSON.stringify(LEDGER));
+  await readLedgerDb(imported, { importJson: true });
+  assert.equal(statSync(join(imported, DB_FILENAME)).mode & 0o777, 0o600);
+});
