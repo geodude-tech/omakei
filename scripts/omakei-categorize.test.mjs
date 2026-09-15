@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -211,21 +211,6 @@ test("an attached folder with no ledger at all fails cleanly and creates nothing
   assert.equal(status, 1);
   assert.match(stderr, /Could not read/);
   assert.equal(existsSync(join(statements, "omakei-ledger.sqlite")), false);
-});
-
-test("a folder with only the JSON ledger is imported, and the JSON is not written", async () => {
-  const { home, statements } = attachedFolder();
-  const jsonPath = join(statements, "omakei-ledger.json");
-  const text = JSON.stringify({ version: 1, selectedMonth: "2026-08", transactions: TX, rules: [] });
-  writeFileSync(jsonPath, text);
-  const mtime = statSync(jsonPath).mtimeMs;
-
-  const { status, stdout, stderr } = cli(["zorp widgets", "shopping"], home);
-  assert.equal(status, 0, stderr);
-  assert.match(stdout, /2 transactions re-tagged/);
-  assert.equal((await categories(statements)).b, "shopping");
-  assert.equal(readFileSync(jsonPath, "utf8"), text);
-  assert.equal(statSync(jsonPath).mtimeMs, mtime);
 });
 
 test("a save the editor derived before the rule was written cannot undo it", async () => {

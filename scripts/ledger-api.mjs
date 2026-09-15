@@ -17,17 +17,12 @@
  */
 import { constants as FS } from "node:fs";
 import { mkdir, open, readdir, rename, stat, unlink } from "node:fs/promises";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
-import { LedgerShapeError, jsonChangedSinceImport, readLedgerDb, updateLedgerDb } from "./ledger-db.mjs";
+import { LedgerShapeError, readLedgerDb, updateLedgerDb } from "./ledger-db.mjs";
 
 export const API_PREFIX = "/__omakei";
-/**
- * The JSON ledger an earlier Omakei wrote. Read once, to import it into the
- * database, and never written again.
- */
-export const LEDGER_FILENAME = "omakei-ledger.json";
 /** The ledger. */
 export const DB_FILENAME = "omakei-ledger.sqlite";
 /** Rewritten whenever the ledger changes, so the bar widget knows to re-read. */
@@ -35,19 +30,6 @@ export const REVISION_FILENAME = "ledger-revision";
 
 export const MAX_LEDGER_BYTES = 20 * 1024 * 1024;
 
-/**
- * Identity of a JSON ledger's bytes.
- *
- * This was the etag when the ledger was a JSON file. The database's etag is its
- * revision now (see `ledger-db.mjs`); the hash survives to record which JSON a
- * database was imported from, so a later change to that file can be noticed.
- *
- * An absent file hashes to "".
- */
-export function ledgerEtag(raw) {
-  if (!raw || raw.length === 0) return "";
-  return createHash("sha256").update(raw).digest("hex");
-}
 const MAX_STATEMENT_BYTES = 32 * 1024 * 1024;
 /** The state file holds one small JSON object; anything larger is not ours. */
 export const MAX_STATE_BYTES = 64 * 1024;
@@ -520,23 +502,11 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
    * The two come from one read on purpose: an etag taken from a second read
    * could name a version the caller never saw.
    *
-   * A folder that still has only a JSON ledger is imported here, on first read.
    * A database that is refused -- a symlink, over the cap, not an Omakei ledger
-   * -- reads as no ledger, the way a refused JSON file always did.
+   * -- reads as no ledger.
    */
-  const warnedJson = new Set();
   async function readLedgerAt(dir) {
-    const found = await readLedgerDb(dir, { importJson: true });
-    if (found && !warnedJson.has(dir)) {
-      warnedJson.add(dir);
-      if (await jsonChangedSinceImport(dir)) {
-        console.warn(
-          `[omakei] ${join(dir, LEDGER_FILENAME)} has changed since it was imported. ` +
-            `The ledger is ${join(dir, DB_FILENAME)}; those changes are not in it.`,
-        );
-      }
-    }
-    return found ?? { ledger: null, etag: "" };
+    return (await readLedgerDb(dir)) ?? { ledger: null, etag: "" };
   }
 
   /**

@@ -30,22 +30,18 @@
  * write in between. The editor's next save is derived from the version before
  * this one, so the server refuses it and the editor merges this rule in; reload
  * the tab to see it sooner.
- *
- * A folder that still holds only `omakei-ledger.json` is imported into
- * `omakei-ledger.sqlite` the first time this runs. The JSON is not written.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   bumpRevisionAt,
   DB_FILENAME,
-  LEDGER_FILENAME,
   MAX_STATE_BYTES,
   parseStateFile,
   readCapped,
   stateDirFor,
 } from "./ledger-api.mjs";
-import { jsonChangedSinceImport, readLedgerDb, updateLedgerDb } from "./ledger-db.mjs";
+import { readLedgerDb, updateLedgerDb } from "./ledger-db.mjs";
 import { CATEGORIES } from "../src/lib/finance/categories.ts";
 import {
   isGenericMerchant,
@@ -111,7 +107,7 @@ export async function run(argv, { env = process.env, home = homedir() } = {}) {
   const [pattern, categoryId] = args;
 
   // Everything that can be wrong with the command is refused before the
-  // ledger is opened, so a mistyped command cannot so much as import it.
+  // ledger is opened, so a mistyped command never touches it.
   if (json && !list) return fail("--json only applies to --list.");
   if (!list && remove && !pattern) return fail("Usage: omakei-categorize.mjs --remove <pattern>");
   if (!list && !remove) {
@@ -130,9 +126,8 @@ export async function run(argv, { env = process.env, home = homedir() } = {}) {
   const path = join(dir, DB_FILENAME);
 
   if (list) {
-    const found = await readLedgerDb(dir, { importJson: true });
+    const found = await readLedgerDb(dir);
     if (!found?.ledger) return fail(`Could not read ${path}`);
-    await warnIfJsonChanged(dir);
     return printList(derive(found.ledger.transactions, userRules(found.ledger)), json);
   }
 
@@ -190,7 +185,6 @@ export async function run(argv, { env = process.env, home = homedir() } = {}) {
   );
 
   if (!result?.ledger && !outcome) return fail(`Could not read ${path}`);
-  await warnIfJsonChanged(dir);
   if (outcome.error) return fail(outcome.error);
   if (result.written) await bumpRevisionAt(stateDirFor(env, home));
   report(outcome.note, outcome.before, outcome.after);
@@ -218,20 +212,6 @@ function printList(transactions, json) {
     );
   }
   return 0;
-}
-
-/**
- * The ledger is the database now, so a rule written to the old JSON by an
- * out-of-date copy of this command is not in it. Say so on stderr, where it
- * does not disturb `--list --json`.
- */
-async function warnIfJsonChanged(dir) {
-  if (await jsonChangedSinceImport(dir)) {
-    process.stderr.write(
-      `warning: ${join(dir, LEDGER_FILENAME)} changed after it was imported; ` +
-        `those changes are not in ${join(dir, DB_FILENAME)}\n`,
-    );
-  }
 }
 
 function report(note, before, after) {

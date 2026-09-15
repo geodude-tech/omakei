@@ -47,9 +47,7 @@ STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omakei/state.json"
 LEDGER=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).ledgerPath' "$STATE")
 ```
 
-  `$LEDGER` is `omakei-ledger.sqlite`. If it still ends in `.json`, the editor
-  has not run since the ledger moved to SQLite: open it once (that imports the
-  JSON), then start again.
+  `$LEDGER` is `omakei-ledger.sqlite`.
 
 - Back the ledger up somewhere **outside** the statements folder and outside
   this repository. `.backup` is safe while the server is running, unlike `cp`:

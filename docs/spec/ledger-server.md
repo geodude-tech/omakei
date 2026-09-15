@@ -56,7 +56,7 @@ Test:                       npm test               # scripts/ledger-api.test.mjs
 
 ```
 scripts/ledger-api.mjs          → createLedgerApi(): the handler, path guards, disk primitives, state file
-scripts/ledger-db.mjs           → the SQLite ledger: guarded open, snapshot read, locked compare-and-set write, JSON import
+scripts/ledger-db.mjs           → the SQLite ledger: guarded open, snapshot read, locked compare-and-set write
 scripts/ledger-api-plugin.mjs   → mounts createLedgerApi() as Vite middleware (apply: "serve")
 scripts/omakei-serve.mjs        → node:http server over dist/, mounts the same handler
 scripts/omakei-html-plugin.mjs  → fills index.html placeholders on the dev server (build leaves them)
@@ -168,15 +168,15 @@ Conventions:
 - **Every failure is bounded and quiet.** `bumpRevision` swallows its errors (a
   missed live-refresh is not a failed save). `readCapped` returns `null` for
   anything that is not a readable regular file within the cap.
-- **Caps are constants at the top of the file:** ledger 20 MB (the database, and
-  a JSON ledger being imported), statement 32 MB, state file 64 KB.
+- **Caps are constants at the top of the file:** ledger 20 MB, statement 32 MB,
+  state file 64 KB.
 - **SQLite is opened by pathname and follows a final-component symlink**, and
   `node:sqlite` has no `SQLITE_OPEN_NOFOLLOW`. `ledger-db.mjs` therefore
-  inspects the file with `O_NOFOLLOW` first (regular, within the cap), refuses a
-  `-journal` / `-wal` / `-shm` beside it that is not a plain file, opens through
-  `/proc/self/fd/<dirfd>`, confirms the inode is unchanged after the open, and
-  keeps the directory descriptor open for the connection's lifetime so the
-  journal SQLite creates mid-write lands in the checked directory.
+  `lstat`s the path first and refuses anything but a regular file within the
+  cap. That keeps a stray link from making some other file the ledger; it does
+  not try to win a race against something swapping files in the user's own
+  folder mid-open, which is the one place the directory-descriptor discipline
+  above is not applied.
 
 ## Behavior this spec fixes in place
 
@@ -255,7 +255,7 @@ theme loader that share this module.
 
 **Ask first:**
 - Adding a route, or a key to `state.json`.
-- Writing anything into the user's folder that is not `omakei-ledger.json`
+- Writing anything into the user's folder that is not `omakei-ledger.sqlite`
   (also an open question in the ledger-contract spec).
 - Raising a cap.
 
