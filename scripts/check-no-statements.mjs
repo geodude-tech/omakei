@@ -8,9 +8,10 @@ import { execFileSync } from "node:child_process";
 // holds PDFs regardless, and `omakei-convert-boa-pdf.mjs` reads one on purpose.
 const BLOCKED = /\.(csv|tsv|ofx|qfx|ofc|pdf)$/i;
 // `folio-ledger.json` is what an early build wrote; still blocked so an old
-// one cannot be committed by accident.
+// one cannot be committed by accident. The SQLite ledger is matched with its
+// `-journal`, `-wal`, and `-shm` sidecars, which hold the same data mid-write.
 const BLOCKED_PATH =
-  /(^|\/)(Financial_Statements|statements|data\/statements)(\/|$)|(folio|omakei)-ledger\.json$/i;
+  /(^|\/)(Financial_Statements|statements|data\/statements)(\/|$)|(folio|omakei)-ledger\.json$|omakei-ledger\.sqlite(-journal|-wal|-shm)?$/i;
 
 const tracked = execFileSync("git", ["ls-files", "-z"], { encoding: "buffer" })
   .toString("utf8")

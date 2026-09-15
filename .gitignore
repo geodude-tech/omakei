@@ -18,6 +18,8 @@ artifacts
 # one cannot slip in.
 omakei-ledger.json
 folio-ledger.json
+# The SQLite ledger and the journal SQLite keeps beside it during a write.
+omakei-ledger.sqlite*
 *.csv
 *.tsv
 *.ofx
