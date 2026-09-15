@@ -414,6 +414,24 @@ test("a saved folder beats OMAKEI_STATEMENTS_DIR", async () => {
   assert.equal(parseStateFile(readFileSync(api.statePath, "utf8")).statementsDir, statements);
 });
 
+test("a state file from before SQLite is brought up to date, keeping its folder", async () => {
+  const { home, statements } = tempTree();
+  const stateDir = join(home, ".state", "omakei");
+  mkdirSync(stateDir, { recursive: true });
+  const old = `${JSON.stringify({
+    version: 1,
+    statementsDir: statements,
+    ledgerPath: join(statements, "omakei-ledger.json"),
+  })}\n`;
+  writeFileSync(join(stateDir, "state.json"), old);
+
+  const api = createLedgerApi({ env: { XDG_STATE_HOME: join(home, ".state") }, home });
+  assert.equal((await api.stateBody()).folder.path, statements);
+  const now = JSON.parse(readFileSync(api.statePath, "utf8"));
+  assert.equal(now.statementsDir, statements);
+  assert.equal(now.ledgerPath, join(statements, "omakei-ledger.sqlite"), "an agent reading ledgerPath finds the live ledger");
+});
+
 test("a separate XDG_STATE_HOME leaves the real state file untouched", async () => {
   const { home, root, statements } = tempTree();
   const realStateDir = join(home, ".state", "omakei");
