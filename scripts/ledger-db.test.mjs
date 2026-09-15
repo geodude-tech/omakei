@@ -30,6 +30,8 @@ import {
   updateLedgerDb,
 } from "./ledger-db.mjs";
 import { LEDGER_FILENAME, MAX_LEDGER_BYTES, ledgerEtag } from "./ledger-api.mjs";
+import { CATEGORIES } from "../src/lib/finance/categories.ts";
+import { isIncome, isSpend } from "../src/lib/finance/ledger.ts";
 
 const temps = [];
 after(() => {
@@ -317,4 +319,55 @@ test("a rule on a bare check cannot be stored, however it is written", async () 
   // A real merchant that merely contains the word is fine.
   db.prepare("INSERT INTO rules (pattern, categoryId, source) VALUES ('checkers', 'dining', 'user')").run();
   db.close();
+});
+
+/* --------------------------------------------------- what an agent queries */
+
+function query(dir, sql) {
+  const db = new DatabaseSync(join(dir, DB_FILENAME), { readOnly: true });
+  try {
+    return db.prepare(sql).all().map((row) => ({ ...row }));
+  } finally {
+    db.close();
+  }
+}
+
+test("the spend and income views are the dashboard's rules, row for row", async () => {
+  const dir = folder();
+  await write(dir, LEDGER);
+  const ids = (sql) => query(dir, sql).map((r) => r.id);
+  assert.deepEqual(ids("SELECT id FROM spend ORDER BY seq"), LEDGER.transactions.filter(isSpend).map((t) => t.id));
+  assert.deepEqual(ids("SELECT id FROM income ORDER BY seq"), LEDGER.transactions.filter(isIncome).map((t) => t.id));
+  assert.deepEqual(
+    ids("SELECT id FROM uncategorized ORDER BY seq"),
+    LEDGER.transactions.filter((t) => t.categoryId === null).map((t) => t.id),
+  );
+  assert.ok(ids("SELECT id FROM spend").includes("t5"), "uncategorized money is still spend");
+  assert.ok(!ids("SELECT id FROM spend").includes("t4"), "a transfer is not");
+});
+
+test("a month's figures come out of the views the way the dashboard computes them", async () => {
+  const dir = folder();
+  await write(dir, LEDGER);
+  const month = LEDGER.transactions.filter((t) => t.date.startsWith("2026-08"));
+  const round = (n) => Math.round(n * 100) / 100;
+  const [row] = query(
+    dir,
+    `SELECT
+       (SELECT -sum(amount) FROM spend  WHERE date LIKE '2026-08%') AS spend,
+       (SELECT  sum(amount) FROM income WHERE date LIKE '2026-08%') AS income`,
+  );
+  assert.equal(round(row.spend), round(-month.filter(isSpend).reduce((a, t) => a + t.amount, 0)));
+  assert.equal(round(row.income), round(month.filter(isIncome).reduce((a, t) => a + t.amount, 0)));
+});
+
+test("category names are in the file, matching the build", async () => {
+  const dir = folder();
+  await write(dir, LEDGER);
+  assert.deepEqual(query(dir, 'SELECT id, name, "group" FROM categories ORDER BY rowid'), CATEGORIES);
+  const [named] = query(
+    dir,
+    "SELECT c.name FROM transactions t JOIN categories c ON c.id = t.categoryId WHERE t.id = 't2'",
+  );
+  assert.equal(named.name, "Coffee");
 });
