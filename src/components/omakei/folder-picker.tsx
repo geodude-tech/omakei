@@ -147,7 +147,7 @@ export function FolderPicker({
         <SheetHeader className="py-4">
           <SheetTitle>Choose your statements folder</SheetTitle>
           <SheetDescription>
-            Omakei reads the exports there and writes <code>omakei-ledger.json</code> back
+            Omakei reads the exports there and keeps <code>omakei-ledger.sqlite</code>
             beside them. Subfolders count.
           </SheetDescription>
         </SheetHeader>

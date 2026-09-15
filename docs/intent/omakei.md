@@ -67,11 +67,13 @@ Three things follow from this that were not true before:
 
 ## Open, not yet decided
 
-- **SQLite.** Raised as a performance question; performance is not the reason.
-  Ten years of transactions is ~30k rows — single-digit MB of JSON, parsed in
-  milliseconds. The real argument for SQLite is that an agent writes SQL, and a
-  queryable ledger is a more legible substrate than a JSON blob. Decide on those
-  grounds.
+- ~~**SQLite.**~~ _Decided 2026-09-14: the ledger is `omakei-ledger.sqlite`._
+  Decided on the grounds this asked for, not performance. What JSON could not
+  give: the query rules live in the file as `spend` / `income` / `uncategorized`
+  views and a `categories` table, so an agent's `SELECT` gets the dashboard's
+  number; and the two writers (the server and `omakei-categorize.mjs`) share a
+  real write lock, closing a lost-update window the JSON could only narrow. See
+  `docs/spec/ledger-sqlite.md`.
 - ~~**Whether the panel contract must serve other people's forks.**~~ _Decided
   2026-08-27:_ panels are build-time `.tsx` in a dev clone. Installed plugin users
   cannot add panels without cloning. Runtime-loaded panels were rejected — they

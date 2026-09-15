@@ -314,7 +314,7 @@ export function Dashboard() {
             </p>
             <p className="hidden text-xs text-muted-foreground sm:block">
               {folder
-                ? `Saved in ${folder.name}/omakei-ledger.json`
+                ? `Saved in ${folder.name}/omakei-ledger.sqlite`
                 : "Every statement, one ledger"}
             </p>
           </div>

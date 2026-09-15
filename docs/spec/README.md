@@ -18,7 +18,8 @@ yet. One — [categorization.md](categorization.md) — started as a _forward sp
 | Adding a dashboard panel | [panel-contract.md](panel-contract.md) | dashboard-app | back half — see also `src/panels/README.md` |
 | Folder of exports → deduped, categorized ledger | [statement-import.md](statement-import.md) | — | |
 | What category a bank line comes out as | [categorization.md](categorization.md) | — | front half — see also `docs/ledger.md` |
-| The one process that touches disk | [ledger-server.md](ledger-server.md) | — | |
+| The one process that touches disk | [ledger-server.md](ledger-server.md) | ledger-sqlite | |
+| The ledger as a SQLite database | [ledger-sqlite.md](ledger-sqlite.md) | — | front half — the views are the query rules |
 | The Omarchy bar pill and popup | [bar-widget.md](bar-widget.md) | ledger-server | |
 | The editor SPA | [dashboard-app.md](dashboard-app.md) | ledger-server, statement-import | |
 | Committed `dist/`, the build-hash hook, plugin shape | [build-and-distribution.md](build-and-distribution.md) | — | |

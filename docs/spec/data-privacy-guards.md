@@ -17,7 +17,8 @@ staged by a wildcard `git add` — hard to commit by accident.
 
 **Success:**
 
-- Real statement files and `omakei-ledger.json` cannot be tracked; `npm test`
+- Real statement files and the ledger (`omakei-ledger.sqlite`, its journals, and
+  the old `omakei-ledger.json`) cannot be tracked; `npm test`
   fails if one ever is.
 - A commit that stages a payment card number, SSN, routing number, IBAN, real
   email, personal phone number, or street address is refused, with the file and
@@ -64,7 +65,8 @@ scripts/check-no-personal-data.test.mjs → the test vectors; the one whole-file
 
 Blocks any tracked path matching `\.(csv|tsv|ofx|qfx|ofc)$` or a path segment of
 `Financial_Statements` / `statements` / `data/statements`, plus
-`(folio|omakei)-ledger.json` (`folio-` is a retired early name, still blocked).
+`(folio|omakei)-ledger.json` (`folio-` is a retired early name, still blocked),
+and `omakei-ledger.sqlite` with its `-journal` / `-wal` / `-shm` sidecars.
 Consequence for the parser: statement fixtures are **inline strings** in
 `parse.test.ts`, never files.
 
@@ -161,7 +163,7 @@ Verified against the current suite (2026-08-28).
 2. **Met.** `npm test` runs both scanners over every tracked file and the tree
    is clean.
 3. **Met.** `.gitignore` blocks `*.csv/*.tsv/*.ofx/*.qfx/*.ofc`,
-   `omakei-ledger.json`, `folio-ledger.json`, `statements/`, `.dev/`, and
+   `omakei-ledger.json`, `folio-ledger.json`, `omakei-ledger.sqlite*`, `statements/`, `.dev/`, and
    `.githooks/personal-terms`.
 4. **Met.** The pre-commit hook runs `check-no-statements` and
    `check-no-personal-data --staged` before `check-dist-fresh`.
