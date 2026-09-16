@@ -2,6 +2,8 @@
 
 This month’s leftover on the [Omarchy](https://omarchy.org/) bar: spend, income, and what you set aside.
 
+![The Omakei editor, showing a month of invented statements](preview.png)
+
 You start with a folder of bank, credit, or mortgage exports. Omakei builds the ledger in that folder. Nothing is uploaded. The files never leave this computer.
 
 The pill is the part you see every day. The ledger underneath it is a plain file you can ask questions of — see [Asking your own questions](#asking-your-own-questions).
