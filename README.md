@@ -14,7 +14,13 @@ omarchy plugin add https://github.com/geodude-tech/omakei.git --enable
 
 Review the QML before you enable it. Like every Omarchy shell plugin, it runs unsandboxed — with your user permissions, on this machine only. Omakei does not send your statements or ledger anywhere.
 
-Nothing else to install: the editor ships prebuilt, and needs only Node, which Omarchy already has.
+Nothing else to install: the editor ships prebuilt, and needs only Node 22.13 or
+newer — the version the ledger's built-in SQLite arrived in. Omarchy ships a
+newer one than that.
+
+One optional extra: reading a **PDF** statement calls `pdftotext`, which comes
+with the `poppler` package. Omarchy already has it. Every other statement format
+needs nothing.
 
 Update later with `omarchy plugin update omakei`.
 
