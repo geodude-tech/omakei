@@ -222,8 +222,8 @@ function extractText(pdfPath) {
   } catch (error) {
     if (error?.code === "ENOENT") {
       throw new UnrecognizedStatement(
-        "pdftotext is not installed. It ships with poppler, which Omarchy already has:\n" +
-          "  sudo pacman -S --needed poppler",
+        "pdftotext is not installed. It ships with the poppler package, which " +
+          "Omarchy already has.",
       );
     }
     throw new UnrecognizedStatement(`pdftotext could not read ${pdfPath}: ${error.message}`);

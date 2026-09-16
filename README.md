@@ -2,6 +2,8 @@
 
 This month’s leftover on the [Omarchy](https://omarchy.org/) bar: spend, income, and what you set aside.
 
+![The Omakei editor, showing a month of invented statements](preview.png)
+
 You start with a folder of bank, credit, or mortgage exports. Omakei builds the ledger in that folder. Nothing is uploaded. The files never leave this computer.
 
 The pill is the part you see every day. The ledger underneath it is a plain file you can ask questions of — see [Asking your own questions](#asking-your-own-questions).
@@ -14,7 +16,13 @@ omarchy plugin add https://github.com/geodude-tech/omakei.git --enable
 
 Review the QML before you enable it. Like every Omarchy shell plugin, it runs unsandboxed — with your user permissions, on this machine only. Omakei does not send your statements or ledger anywhere.
 
-Nothing else to install: the editor ships prebuilt, and needs only Node, which Omarchy already has.
+Nothing else to install: the editor ships prebuilt, and needs only Node 22.13 or
+newer — the version the ledger's built-in SQLite arrived in. Omarchy ships a
+newer one than that.
+
+One optional extra: reading a **PDF** statement calls `pdftotext`, which comes
+with the `poppler` package. Omarchy already has it. Every other statement format
+needs nothing.
 
 Update later with `omarchy plugin update omakei`.
 
