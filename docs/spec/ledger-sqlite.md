@@ -1,8 +1,10 @@
 # Spec: The Ledger as SQLite
 
-_Status: implemented and cut over 2026-09-14. The one-time JSON import and the
-descriptor-anchored open were removed afterwards as no longer earning their
-code (see Decisions). Traces to `docs/intent/omakei.md` ("SQLite", decided)._
+_Status: implemented and cut over 2026-09-14. The one-time JSON import was
+removed afterwards as no longer earning its code; the descriptor-anchored open
+was removed with it and then restored once a bare `lstat`-then-open was found
+to reopen the pathname race it existed to close (see Decisions). Traces to
+`docs/intent/omakei.md` ("SQLite", decided)._
 
 ## Objective
 
@@ -75,11 +77,19 @@ it at 30k rows while a full scan answers an agent's query in milliseconds.
   publish, drift warning) was deleted once it had run. A folder with only
   `omakei-ledger.json` reads as no ledger. Restoring one from JSON is a one-off
   script through `updateLedgerDb`.
-- **A symlink is refused (`409`), not replaced — with one `lstat`.** SQLite
-  would follow it. The first version also anchored the open to a directory
-  descriptor, checked the journal sidecars, and re-checked the inode after
-  opening; that still left a race open (SQLite names its journal mid-write) and
-  bought little in a folder only the user writes to, so it was cut back.
+- **A symlink is refused (`409`), not replaced — the open is anchored to the
+  directory, not a bare pathname.** SQLite would follow a symlink at the final
+  component, and `node:sqlite` has no `SQLITE_OPEN_NOFOLLOW`. A `lstat` on the
+  pathname followed by a separate open of that pathname leaves a window
+  between the two where the name can be swapped for a symlink — including by a
+  synced or mounted folder's own client, not only a same-user attacker. The
+  open holds one directory descriptor for both the pre-open check (`O_NOFOLLOW`
+  on the final component) and the database open itself, then re-checks the
+  same name through the same descriptor afterward: a device/inode mismatch
+  means the name was retargeted mid-open, and the connection is refused rather
+  than used. This closes the main-file race; SQLite still names its rollback
+  journal by path mid-write, which is not re-verified the same way (see Open
+  Questions).
 
 ## Measured
 
@@ -112,9 +122,12 @@ leftover JSON.
 
 ## Open Questions
 
-1. **Open race, accepted.** A link swapped in between the `lstat` and SQLite's
-   open, or at the journal's name mid-write, is followed. Same-user attacker in
-   the user's own folder only; `openat2` would close it and Node has none.
+1. **Journal race, accepted.** The main database file's open is anchored to a
+   directory descriptor and its identity re-verified after `DatabaseSync`
+   opens it (see Decisions), which closes the race a bare `lstat`-then-open
+   left. SQLite still creates its rollback journal by name mid-write, and that
+   name is not re-verified the same way; a link placed there in that instant is
+   followed. `openat2` would close it and Node has none.
 2. **Schema changes.** `CREATE TABLE IF NOT EXISTS` does not alter an existing
    table. The first column added after cutover needs a real migration keyed on
    `schemaVersion`.

@@ -15,9 +15,8 @@
  * Built-in `node:sqlite` only: installers never run `npm install`.
  */
 import { DatabaseSync } from "node:sqlite";
-import { chmodSync, lstatSync } from "node:fs";
+import { closeSync, constants as FS, fchmodSync, fstatSync, openSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join } from "node:path";
 import { DB_FILENAME, MAX_LEDGER_BYTES, isLedgerPayload } from "./ledger-api.mjs";
 import { CATEGORIES, TRANSFER_CATEGORY } from "../src/lib/finance/categories.ts";
 
@@ -142,53 +141,134 @@ export class LedgerShapeError extends Error {}
 /* ------------------------------------------------------------------- open */
 
 /**
- * What sits where the database goes, without following it: `"missing"`,
- * `"present"`, or `"refused"` for a symlink, anything but a regular file, or a
- * file over the cap.
+ * What sits at `name` inside the directory behind `dirFd`, without following
+ * it: `{ status: "missing" }`, `{ status: "refused" }` for a symlink, anything
+ * but a regular file, or a file over the cap, or `{ status: "present", dev,
+ * ino }` naming exactly the inode that was checked.
  *
- * SQLite opens by pathname and follows a symlink, and `node:sqlite` has no
- * `SQLITE_OPEN_NOFOLLOW`, so a link in place of the ledger is refused here
- * before SQLite sees it. The folder is the user's own: this keeps a stray link
- * from turning some other file into the ledger. It does not try to win a race
- * against something swapping files in that folder while it is being opened.
+ * The open goes through `dirFd` rather than a fresh pathname lookup, and
+ * `O_NOFOLLOW` on the final component makes the kernel refuse a symlink there
+ * instead of resolving it -- `node:sqlite` has no `SQLITE_OPEN_NOFOLLOW` of its
+ * own. Returning the checked inode, not just a verdict, is what lets the
+ * caller prove afterward that nothing else took that name in the meantime.
+ *
+ * `keepOpen` leaves a `"present"` result's descriptor open and returns it as
+ * `fd`, so a caller that needs to act on exactly the inode just verified (for
+ * example, setting its mode) can do so through the descriptor rather than
+ * resolving the name by path a second time. The caller then owns closing it.
  */
-function inspectDb(path) {
-  let info;
+function inspectAt(dirFd, name, { keepOpen = false } = {}) {
+  let fd;
   try {
-    info = lstatSync(path);
+    fd = openSync(`/proc/self/fd/${dirFd}/${name}`, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
   } catch (err) {
-    return err?.code === "ENOENT" ? "missing" : "refused";
+    return { status: err?.code === "ENOENT" ? "missing" : "refused" };
   }
-  return info.isFile() && info.size <= MAX_LEDGER_BYTES ? "present" : "refused";
+  const info = fstatSync(fd);
+  if (!info.isFile() || info.size > MAX_LEDGER_BYTES) {
+    closeSync(fd);
+    return { status: "refused" };
+  }
+  if (!keepOpen) closeSync(fd);
+  return keepOpen
+    ? { status: "present", dev: info.dev, ino: info.ino, fd }
+    : { status: "present", dev: info.dev, ino: info.ino };
+}
+
+/** "missing", "present", or "refused" for the database in `dir`, without opening it. */
+function inspectDb(dir) {
+  let dirFd;
+  try {
+    dirFd = openSync(dir, FS.O_RDONLY | FS.O_DIRECTORY);
+  } catch {
+    return "missing";
+  }
+  try {
+    return inspectAt(dirFd, DB_FILENAME).status;
+  } finally {
+    closeSync(dirFd);
+  }
 }
 
 /**
  * The database in `dir`, or null when there is none (and `create` is false) or
  * what is there is refused.
+ *
+ * A `lstat` on the pathname followed by a separate open of that same pathname
+ * leaves a window between the two: anything able to write into `dir` --
+ * including a folder that is synced or mounted rather than purely local -- can
+ * drop a symlink in after the check and have SQLite's own open follow it out
+ * of the ledger's folder. This opens the directory once and keeps that
+ * descriptor for everything that follows, so the name is always resolved
+ * against the exact directory that was checked, never a fresh lookup by path.
+ * After `DatabaseSync` opens the name, the same descriptor is used to inspect
+ * it again: if the device/inode pair is not the one just verified -- the name
+ * was retargeted while the open was in flight -- the connection is refused
+ * rather than used, closing the gap a standalone `lstat` cannot.
  */
 function openDb(dir, { readOnly = false, create = false } = {}) {
-  const path = join(dir, DB_FILENAME);
-  const found = inspectDb(path);
-  if (found === "refused" || (found === "missing" && !create)) return null;
-  let db;
+  let dirFd;
   try {
-    db = new DatabaseSync(path, { readOnly, timeout: BUSY_TIMEOUT_MS, allowExtension: false });
+    dirFd = openSync(dir, FS.O_RDONLY | FS.O_DIRECTORY);
+  } catch {
+    return null;
+  }
+  const release = () => {
+    try {
+      closeSync(dirFd);
+    } catch {
+      /* already closed */
+    }
+  };
+
+  const before = inspectAt(dirFd, DB_FILENAME);
+  if (before.status === "refused" || (before.status === "missing" && !create)) {
+    release();
+    return null;
+  }
+
+  const at = `/proc/self/fd/${dirFd}/${DB_FILENAME}`;
+  let db;
+  let after;
+  try {
+    db = new DatabaseSync(at, { readOnly, timeout: BUSY_TIMEOUT_MS, allowExtension: false });
+    // Only a freshly created database needs its mode fixed, so the descriptor
+    // is kept open for exactly that case rather than every open paying for it.
+    after = inspectAt(dirFd, DB_FILENAME, { keepOpen: before.status === "missing" });
+    const same =
+      after.status === "present" &&
+      (before.status === "missing" || (after.dev === before.dev && after.ino === before.ino));
+    if (!same) throw new Error("the ledger database changed identity while it was being opened");
     // SQLite creates the file with the process umask (0644 here), where every
     // other file Omakei writes is 0600. It gives its journal the database's
-    // mode, so setting it once on creation covers both.
-    if (found === "missing") chmodSync(path, 0o600);
+    // mode, so setting it once on creation covers both. `fchmod` acts on the
+    // descriptor just verified, rather than resolving the name by path again.
+    if (before.status === "missing") fchmodSync(after.fd, 0o600);
     db.enableDefensive(true);
     db.exec("PRAGMA trusted_schema = OFF");
     if (!readOnly) db.exec("PRAGMA journal_mode = DELETE");
-    return db;
   } catch {
     try {
       db?.close();
     } catch {
       /* not open */
     }
+    release();
     return null;
+  } finally {
+    if (after?.fd !== undefined) closeSync(after.fd);
   }
+
+  return {
+    db,
+    close() {
+      try {
+        db.close();
+      } finally {
+        release();
+      }
+    },
+  };
 }
 
 /* ----------------------------------------------------------------- schema */
@@ -359,17 +439,17 @@ function replaceSnapshot(db, ledger) {
  * null when a database is there but refused (a link, too large, not ours).
  */
 export async function readLedgerDb(dir) {
-  const db = openDb(dir, { readOnly: true });
-  if (!db) {
-    return inspectDb(join(dir, DB_FILENAME)) === "missing" ? { ledger: null, etag: "" } : null;
+  const handle = openDb(dir, { readOnly: true });
+  if (!handle) {
+    return inspectDb(dir) === "missing" ? { ledger: null, etag: "" } : null;
   }
   try {
-    if (!isOurs(db)) return null;
-    return { ledger: readSnapshot(db), etag: etagOf(db) };
+    if (!isOurs(handle.db)) return null;
+    return { ledger: readSnapshot(handle.db), etag: etagOf(handle.db) };
   } catch {
     return null;
   } finally {
-    db.close();
+    handle.close();
   }
 }
 
@@ -389,8 +469,9 @@ export async function readLedgerDb(dir) {
  * stored, and resolves null when the database is refused.
  */
 export async function updateLedgerDb(dir, decide, { create = true } = {}) {
-  const db = openDb(dir, { create });
-  if (!db) return null;
+  const handle = openDb(dir, { create });
+  if (!handle) return null;
+  const { db } = handle;
   try {
     // Only a database with nothing in it yet is given the schema. Adding tables
     // to some other SQLite file would quietly adopt it as the ledger.
@@ -423,6 +504,6 @@ export async function updateLedgerDb(dir, decide, { create = true } = {}) {
       throw err;
     }
   } finally {
-    db.close();
+    handle.close();
   }
 }
