@@ -140,41 +140,6 @@ export class LedgerShapeError extends Error {}
 
 /* ------------------------------------------------------------------- open */
 
-/**
- * What sits at `name` inside the directory behind `dirFd`, without following
- * it: `{ status: "missing" }`, `{ status: "refused" }` for a symlink, anything
- * but a regular file, or a file over the cap, or `{ status: "present", dev,
- * ino }` naming exactly the inode that was checked.
- *
- * The open goes through `dirFd` rather than a fresh pathname lookup, and
- * `O_NOFOLLOW` on the final component makes the kernel refuse a symlink there
- * instead of resolving it -- `node:sqlite` has no `SQLITE_OPEN_NOFOLLOW` of its
- * own. Returning the checked inode, not just a verdict, is what lets the
- * caller prove afterward that nothing else took that name in the meantime.
- *
- * `keepOpen` leaves a `"present"` result's descriptor open and returns it as
- * `fd`, so a caller that needs to act on exactly the inode just verified (for
- * example, setting its mode) can do so through the descriptor rather than
- * resolving the name by path a second time. The caller then owns closing it.
- */
-function inspectAt(dirFd, name, { keepOpen = false } = {}) {
-  let fd;
-  try {
-    fd = openSync(`/proc/self/fd/${dirFd}/${name}`, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
-  } catch (err) {
-    return { status: err?.code === "ENOENT" ? "missing" : "refused" };
-  }
-  const info = fstatSync(fd);
-  if (!info.isFile() || info.size > MAX_LEDGER_BYTES) {
-    closeSync(fd);
-    return { status: "refused" };
-  }
-  if (!keepOpen) closeSync(fd);
-  return keepOpen
-    ? { status: "present", dev: info.dev, ino: info.ino, fd }
-    : { status: "present", dev: info.dev, ino: info.ino };
-}
-
 /** "missing", "present", or "refused" for the database in `dir`, without opening it. */
 function inspectDb(dir) {
   let dirFd;
@@ -183,10 +148,19 @@ function inspectDb(dir) {
   } catch {
     return "missing";
   }
+  let fd;
   try {
-    return inspectAt(dirFd, DB_FILENAME).status;
+    fd = openSync(`/proc/self/fd/${dirFd}/${DB_FILENAME}`, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
+  } catch (err) {
+    return err?.code === "ENOENT" ? "missing" : "refused";
   } finally {
     closeSync(dirFd);
+  }
+  try {
+    const info = fstatSync(fd);
+    return info.isFile() && info.size <= MAX_LEDGER_BYTES ? "present" : "refused";
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -197,14 +171,22 @@ function inspectDb(dir) {
  * A `lstat` on the pathname followed by a separate open of that same pathname
  * leaves a window between the two: anything able to write into `dir` --
  * including a folder that is synced or mounted rather than purely local -- can
- * drop a symlink in after the check and have SQLite's own open follow it out
- * of the ledger's folder. This opens the directory once and keeps that
- * descriptor for everything that follows, so the name is always resolved
- * against the exact directory that was checked, never a fresh lookup by path.
- * After `DatabaseSync` opens the name, the same descriptor is used to inspect
- * it again: if the device/inode pair is not the one just verified -- the name
- * was retargeted while the open was in flight -- the connection is refused
- * rather than used, closing the gap a standalone `lstat` cannot.
+ * drop a symlink in after the check and have SQLite's own open follow it. That
+ * gap does not close just by anchoring both steps to the same directory
+ * descriptor either, since the second step still looks the name up again --
+ * a swap timed between the two, then reverted before a post-open recheck,
+ * would pass a same-inode comparison while SQLite is already holding the
+ * swapped-in file open.
+ *
+ * So the name is resolved by pathname exactly once here, with `O_NOFOLLOW` on
+ * the final component (`node:sqlite` has no `SQLITE_OPEN_NOFOLLOW` of its
+ * own), and `DatabaseSync` is handed `/proc/self/fd/<thatFd>` rather than the
+ * name. That path names the open file description just verified, not the
+ * directory entry: opening it resolves to that exact inode regardless of what
+ * the name is later renamed to, replaced with, or unlinked from -- there is no
+ * second lookup left to race. A missing file is created the same way, with
+ * `O_EXCL` so a second process creating it at the same instant is the one
+ * that wins.
  */
 function openDb(dir, { readOnly = false, create = false } = {}) {
   let dirFd;
@@ -221,29 +203,46 @@ function openDb(dir, { readOnly = false, create = false } = {}) {
     }
   };
 
-  const before = inspectAt(dirFd, DB_FILENAME);
-  if (before.status === "refused" || (before.status === "missing" && !create)) {
-    release();
-    return null;
+  const name = `/proc/self/fd/${dirFd}/${DB_FILENAME}`;
+  let fileFd;
+  let justCreated = false;
+  try {
+    fileFd = openSync(name, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
+  } catch (err) {
+    if (err?.code !== "ENOENT" || !create) {
+      release();
+      return null;
+    }
+    try {
+      fileFd = openSync(name, FS.O_RDONLY | FS.O_CREAT | FS.O_EXCL | FS.O_NOFOLLOW, 0o600);
+      justCreated = true;
+    } catch (err2) {
+      // Another process created it in this same instant: adopt what it made,
+      // exactly as SQLite's own (non-exclusive) create always has, rather
+      // than refusing a save that only lost a race that does not matter.
+      if (err2?.code !== "EEXIST") {
+        release();
+        return null;
+      }
+      try {
+        fileFd = openSync(name, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
+      } catch {
+        release();
+        return null;
+      }
+    }
   }
 
-  const at = `/proc/self/fd/${dirFd}/${DB_FILENAME}`;
   let db;
-  let after;
   try {
-    db = new DatabaseSync(at, { readOnly, timeout: BUSY_TIMEOUT_MS, allowExtension: false });
-    // Only a freshly created database needs its mode fixed, so the descriptor
-    // is kept open for exactly that case rather than every open paying for it.
-    after = inspectAt(dirFd, DB_FILENAME, { keepOpen: before.status === "missing" });
-    const same =
-      after.status === "present" &&
-      (before.status === "missing" || (after.dev === before.dev && after.ino === before.ino));
-    if (!same) throw new Error("the ledger database changed identity while it was being opened");
+    const info = fstatSync(fileFd);
+    if (!info.isFile() || info.size > MAX_LEDGER_BYTES) throw new Error("the ledger database is refused");
     // SQLite creates the file with the process umask (0644 here), where every
-    // other file Omakei writes is 0600. It gives its journal the database's
-    // mode, so setting it once on creation covers both. `fchmod` acts on the
-    // descriptor just verified, rather than resolving the name by path again.
-    if (before.status === "missing") fchmodSync(after.fd, 0o600);
+    // other file Omakei writes is 0600. `O_CREAT`'s mode argument is itself
+    // subject to that umask, so it is fixed here on the verified descriptor,
+    // which also covers the journal since SQLite gives it the database's mode.
+    if (justCreated) fchmodSync(fileFd, 0o600);
+    db = new DatabaseSync(`/proc/self/fd/${fileFd}`, { readOnly, timeout: BUSY_TIMEOUT_MS, allowExtension: false });
     db.enableDefensive(true);
     db.exec("PRAGMA trusted_schema = OFF");
     if (!readOnly) db.exec("PRAGMA journal_mode = DELETE");
@@ -253,11 +252,13 @@ function openDb(dir, { readOnly = false, create = false } = {}) {
     } catch {
       /* not open */
     }
+    closeSync(fileFd);
     release();
     return null;
-  } finally {
-    if (after?.fd !== undefined) closeSync(after.fd);
   }
+  // `db` has its own descriptor from opening `/proc/self/fd/<fileFd>`; this
+  // one was only ever needed to name that inode safely.
+  closeSync(fileFd);
 
   return {
     db,

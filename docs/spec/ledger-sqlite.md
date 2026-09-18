@@ -77,19 +77,24 @@ it at 30k rows while a full scan answers an agent's query in milliseconds.
   publish, drift warning) was deleted once it had run. A folder with only
   `omakei-ledger.json` reads as no ledger. Restoring one from JSON is a one-off
   script through `updateLedgerDb`.
-- **A symlink is refused (`409`), not replaced — the open is anchored to the
-  directory, not a bare pathname.** SQLite would follow a symlink at the final
+- **A symlink is refused (`409`), not replaced — the name is resolved once, not
+  checked then reopened.** SQLite would follow a symlink at the final
   component, and `node:sqlite` has no `SQLITE_OPEN_NOFOLLOW`. A `lstat` on the
   pathname followed by a separate open of that pathname leaves a window
   between the two where the name can be swapped for a symlink — including by a
-  synced or mounted folder's own client, not only a same-user attacker. The
-  open holds one directory descriptor for both the pre-open check (`O_NOFOLLOW`
-  on the final component) and the database open itself, then re-checks the
-  same name through the same descriptor afterward: a device/inode mismatch
-  means the name was retargeted mid-open, and the connection is refused rather
-  than used. This closes the main-file race; SQLite still names its rollback
-  journal by path mid-write, which is not re-verified the same way (see Open
-  Questions).
+  synced or mounted folder's own client, not only a same-user attacker.
+  Anchoring both steps to the same directory descriptor narrows that window
+  but does not close it, since the open still looks the name up again; a swap
+  timed between the check and the open, then reverted before a same-inode
+  recheck, passes the recheck while SQLite is already holding the swapped-in
+  file. So the name is opened exactly once, with `O_NOFOLLOW` on the final
+  component, and `DatabaseSync` is handed `/proc/self/fd/<thatFd>` rather than
+  the name: that path names the open file description just verified, and
+  resolving it again always lands on that same inode regardless of what the
+  name is later renamed to or replaced with — there is no second lookup left
+  to race. This closes the main-file race; SQLite still names its rollback
+  journal by the real path mid-write, which is not routed through the
+  verified descriptor the same way (see Open Questions).
 
 ## Measured
 
@@ -122,12 +127,13 @@ leftover JSON.
 
 ## Open Questions
 
-1. **Journal race, accepted.** The main database file's open is anchored to a
-   directory descriptor and its identity re-verified after `DatabaseSync`
-   opens it (see Decisions), which closes the race a bare `lstat`-then-open
-   left. SQLite still creates its rollback journal by name mid-write, and that
-   name is not re-verified the same way; a link placed there in that instant is
-   followed. `openat2` would close it and Node has none.
+1. **Journal race, accepted.** The main database file is opened once, by an
+   `O_NOFOLLOW`-verified descriptor rather than a name `DatabaseSync` looks up
+   again (see Decisions), which closes the race a bare `lstat`-then-open, or
+   even a directory-descriptor-anchored recheck, left open. SQLite still
+   creates its rollback journal by the real path mid-write, and that name is
+   not opened through a verified descriptor the same way; a link placed there
+   in that instant is followed. `openat2` would close it and Node has none.
 2. **Schema changes.** `CREATE TABLE IF NOT EXISTS` does not alter an existing
    table. The first column added after cutover needs a real migration keyed on
    `schemaVersion`.
