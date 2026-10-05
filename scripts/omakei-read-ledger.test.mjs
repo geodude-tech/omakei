@@ -4,12 +4,12 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { readLedgerForWidget } from "./omakei-read-ledger.mjs";
-import { renderStateFile } from "./ledger-api.mjs";
+import { ledgerDirFor, prepareLedgerDir, renderStateFile } from "./ledger-api.mjs";
 import { updateLedgerDb } from "./ledger-db.mjs";
 
 const temps = [];
@@ -26,8 +26,9 @@ function attachedHome() {
   mkdirSync(statements, { recursive: true });
   const stateDir = join(home, ".local", "state", "omakei");
   mkdirSync(stateDir, { recursive: true });
-  writeFileSync(join(stateDir, "state.json"), renderStateFile(statements));
-  return { root, home, statements };
+  const ledgerDir = ledgerDirFor(statements, {}, home);
+  writeFileSync(join(stateDir, "state.json"), renderStateFile(statements, ledgerDir));
+  return { root, home, statements, ledgerDir, ledgerPath: join(ledgerDir, "omakei-ledger.sqlite") };
 }
 
 /** Isolate both, or the real XDG_STATE_HOME on this machine wins. */
@@ -54,10 +55,24 @@ function unknownTx(id, description, amount) {
 }
 
 const writeDb = (dir, ledger) => updateLedgerDb(dir, () => ledger);
+/** Write the ledger where the server keeps it for `statements`. */
+const writeAttached = async (home, statements, ledger) =>
+  writeDb(await prepareLedgerDir(statements, envFor(home)), ledger);
 
 test("the ledger in the folder the state file points at is returned", async () => {
-  const { home, statements } = attachedHome();
-  await writeDb(statements, LEDGER);
+  const { home, statements, ledgerPath } = attachedHome();
+  await writeAttached(home, statements, LEDGER);
+  const { ledger, path } = await readLedgerForWidget("", envFor(home));
+  assert.deepEqual(ledger.transactions.map((t) => t.id), ["a"]);
+  assert.equal(path, ledgerPath);
+});
+
+test("a ledger still in the attached folder from before it moved is read until it is carried over", async () => {
+  const { root, home, statements } = attachedHome();
+  const old = join(root, "old");
+  mkdirSync(old, { mode: 0o700 });
+  await writeDb(old, LEDGER);
+  writeFileSync(join(statements, "omakei-ledger.sqlite"), readFileSync(join(old, "omakei-ledger.sqlite")));
   const { ledger, path } = await readLedgerForWidget("", envFor(home));
   assert.deepEqual(ledger.transactions.map((t) => t.id), ["a"]);
   assert.equal(path, join(statements, "omakei-ledger.sqlite"));
@@ -74,11 +89,11 @@ test("nothing attached reads as null rather than an error", async () => {
 });
 
 test("a folder with no database reads as null, reports where it looked, and creates nothing", async () => {
-  const { home, statements } = attachedHome();
+  const { home, statements, ledgerPath } = attachedHome();
   writeFileSync(join(statements, "omakei-ledger.json"), JSON.stringify(LEDGER));
   const out = await readLedgerForWidget("", envFor(home));
   assert.equal(out.ledger, null, "a leftover JSON ledger is not read");
-  assert.equal(out.path, join(statements, "omakei-ledger.sqlite"));
+  assert.equal(out.path, ledgerPath);
   assert.deepEqual(out.uncategorized, NOTHING_UNCATEGORIZED);
   assert.deepEqual(readdirSync(statements), ["omakei-ledger.json"]);
 });
@@ -86,7 +101,7 @@ test("a folder with no database reads as null, reports where it looked, and crea
 test("a symlinked database is refused", async () => {
   const { root, home, statements } = attachedHome();
   const elsewhere = join(root, "elsewhere");
-  mkdirSync(elsewhere);
+  mkdirSync(elsewhere, { mode: 0o700 });
   await writeDb(elsewhere, LEDGER);
   symlinkSync(join(elsewhere, "omakei-ledger.sqlite"), join(statements, "omakei-ledger.sqlite"));
   const out = await readLedgerForWidget("", envFor(home));
@@ -96,7 +111,7 @@ test("a symlinked database is refused", async () => {
 
 test("a symlinked state file is refused", async () => {
   const { root, home, statements } = attachedHome();
-  await writeDb(statements, LEDGER);
+  await writeAttached(home, statements, LEDGER);
   const decoy = join(root, "decoy-state.json");
   writeFileSync(decoy, renderStateFile(statements));
   const statePath = join(home, ".local", "state", "omakei", "state.json");
@@ -121,9 +136,9 @@ test("a FIFO in the database's place does not hang the read", async () => {
 
 test("the override wins over the state file, as the database or its folder, and ~ expands", async () => {
   const { home, statements } = attachedHome();
-  await writeDb(statements, LEDGER);
+  await writeAttached(home, statements, LEDGER);
   const other = join(home, "Other");
-  mkdirSync(other);
+  mkdirSync(other, { mode: 0o700 });
   await writeDb(other, { version: 1, rules: [], transactions: [{ id: "b" }, { id: "c" }] });
   for (const override of [join(other, "omakei-ledger.sqlite"), other, "~/Other", "~/Other/omakei-ledger.sqlite"]) {
     const { ledger } = await readLedgerForWidget(override, envFor(home));
@@ -146,14 +161,14 @@ test("the CLI prints JSON and exits cleanly with nothing attached", () => {
 });
 
 test("the CLI prints the database's ledger as JSON", async () => {
-  const { home, statements } = attachedHome();
-  await writeDb(statements, LEDGER);
+  const { home, statements, ledgerPath } = attachedHome();
+  await writeAttached(home, statements, LEDGER);
   const out = execFileSync("node", ["scripts/omakei-read-ledger.mjs"], {
     encoding: "utf8",
     env: { ...process.env, HOME: home, XDG_STATE_HOME: join(home, ".local", "state") },
   });
   const parsed = JSON.parse(out);
-  assert.equal(parsed.path, join(statements, "omakei-ledger.sqlite"));
+  assert.equal(parsed.path, ledgerPath);
   assert.equal(parsed.ledger.transactions[0].id, "a");
 });
 
@@ -170,7 +185,7 @@ test("the merchants that need a category come back, biggest first and capped", a
   // `QUUX 2` would be one merchant.
   const others = ["ALFA", "BRAVO", "CHARLIE", "DELTA", "ECHO", "FOXTROT", "GOLF", "HOTEL"];
   others.forEach((name, i) => transactions.push(unknownTx(`x${i}`, `QUUX ${name} SUPPLY`, -1)));
-  await writeDb(statements, { version: 1, rules: [], transactions });
+  await writeAttached(home, statements, { version: 1, rules: [], transactions });
 
   const { uncategorized } = await readLedgerForWidget("", envFor(home));
   assert.equal(uncategorized.total, 10, "ZORP, PORCH SUPPLY, and eight QUUX; the coffee row is out");

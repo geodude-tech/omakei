@@ -4,7 +4,7 @@ This month’s leftover on the [Omarchy](https://omarchy.org/) bar: spend, incom
 
 ![The Omakei editor, showing a month of invented statements](preview.png)
 
-You start with a folder of bank, credit, or mortgage exports. Omakei builds the ledger in that folder. Nothing is uploaded. The files never leave this computer.
+You start with a folder of bank, credit, or mortgage exports. Omakei builds a ledger from that folder. Nothing is uploaded. The files never leave this computer.
 
 The pill is the part you see every day. The ledger underneath it is a plain file you can ask questions of — see [Asking your own questions](#asking-your-own-questions).
 
@@ -32,7 +32,7 @@ You do not need a ledger yet.
 
 1. Click the **Omakei** pill on the bar (or **Open Omakei** in the popup). The editor starts the first time you open it, which takes about a second; nothing runs in the background while Omakei is closed.
 2. Choose the folder that holds your statements — any folder you already use, or an empty one you will drop exports into.
-3. Omakei reads the files, auto-categorizes what it knows, and keeps the ledger in `omakei-ledger.sqlite` in that same folder.
+3. Omakei reads the files, auto-categorizes what it knows, and keeps the ledger in `omakei-ledger.sqlite` in a private directory under `~/.local/state/omakei/`.
 4. The pill shows your net over the month ending today, so it reads the same on
    the 3rd as on the 23rd rather than sinking every time the big bills land. It
    updates whenever the ledger file changes.
@@ -65,7 +65,7 @@ In the popup: `[` / `]` change month, `t` jumps to this month, `o` opens Omakei,
 
 Omakei has no AI in it, and never will. What it has is one clean file.
 
-Every statement you drop in the folder ends up in `omakei-ledger.sqlite` next to them: one table of transactions with dates, amounts, descriptions, accounts, and categories, plus `spend` and `income` views that already leave out transfers between your own accounts. Point an agent that can run `sqlite3` — Claude Code, or any harness you already use — at that file and ask the things a spending app never answers well:
+Every statement you drop in the folder ends up in `omakei-ledger.sqlite` (its path is `ledgerPath` in `~/.local/state/omakei/state.json`): one table of transactions with dates, amounts, descriptions, accounts, and categories, plus `spend` and `income` views that already leave out transfers between your own accounts. Point an agent that can run `sqlite3` — Claude Code, or any harness you already use — at that file and ask the things a spending app never answers well:
 
 - Am I spending more than I make, over the last six months rather than this one?
 - Which categories are drifting up, and since when?
@@ -83,9 +83,9 @@ This needs a clone of the repository rather than a plugin install, because panel
 
 ## Your data
 
-Statements and the generated ledger stay in the folder you attached. Removing the plugin does not delete that folder. There is no account, no cloud, and no telemetry.
+Statements stay in the folder you attached; the generated ledger is kept in a directory only your user can open (`~/.local/state/omakei/ledgers/`, mode 0700). Removing the plugin deletes neither. A ledger left in the attached folder by an older version is copied there once and then left alone. There is no account, no cloud, and no telemetry.
 
-The editor listens on `127.0.0.1` only, and refuses requests that arrive under another host name or from another origin, so nothing else on your network — or in your browser — can reach your ledger.
+The editor listens on `127.0.0.1` only, and refuses requests that arrive under another host name or from another origin, so nothing else on your network — or in your browser — can reach your ledger. It also asks the kernel which user opened each connection and answers only the user running it, so another account on the same machine cannot read your statements through it.
 
 ### Keeping the ledger somewhere else
 

@@ -38,6 +38,7 @@ import {
   DB_FILENAME,
   MAX_STATE_BYTES,
   parseStateFile,
+  prepareLedgerDir,
   readCapped,
   stateDirFor,
 } from "./ledger-api.mjs";
@@ -123,10 +124,11 @@ export async function run(argv, { env = process.env, home = homedir() } = {}) {
 
   const dir = await resolveStatementsDir(env, home);
   if (!dir) return fail("No ledger found. Attach a folder in the editor first.");
-  const path = join(dir, DB_FILENAME);
+  const ledgerDir = await prepareLedgerDir(dir, { env, home });
+  const path = join(ledgerDir, DB_FILENAME);
 
   if (list) {
-    const found = await readLedgerDb(dir);
+    const found = await readLedgerDb(ledgerDir);
     if (!found?.ledger) return fail(`Could not read ${path}`);
     return printList(derive(found.ledger.transactions, userRules(found.ledger)), json);
   }
@@ -135,7 +137,7 @@ export async function run(argv, { env = process.env, home = homedir() } = {}) {
   // that moment. There is no earlier read for it to be stale against.
   let outcome;
   const result = await updateLedgerDb(
-    dir,
+    ledgerDir,
     ({ ledger }) => {
       if (!ledger) return null;
       const users = userRules(ledger);

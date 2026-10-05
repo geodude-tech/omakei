@@ -14,16 +14,18 @@ Omakei records the attached folder in `$XDG_STATE_HOME/omakei/state.json`,
 falling back to `~/.local/state/omakei/state.json`:
 
 ```json
-{ "version": 1, "statementsDir": "/path/to/statements", "ledgerPath": "/path/to/statements/omakei-ledger.sqlite" }
+{ "version": 1, "statementsDir": "/path/to/statements", "ledgerPath": "~/.local/state/omakei/ledgers/<id>/omakei-ledger.sqlite" }
 ```
 
 Read `ledgerPath` from there rather than guessing. If the file is missing, no
 folder has been attached yet and there is no ledger to read — say so instead of
 searching the disk for one.
 
-An `omakei-ledger.json` sitting next to `omakei-ledger.sqlite` is left over
-from before Omakei moved the ledger to SQLite. Nothing reads or writes it — do
-not read it either.
+The ledger lives in a private (mode 0700) directory under the state dir, not
+in the statements folder. An `omakei-ledger.sqlite` or `omakei-ledger.json`
+still sitting in the statements folder is left over from an older version.
+Omakei copies the SQLite one over once and never writes it again. Do not read
+either.
 
 ## What is in it
 

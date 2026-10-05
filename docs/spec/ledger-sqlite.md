@@ -6,7 +6,10 @@ code (see Decisions). Traces to `docs/intent/omakei.md` ("SQLite", decided)._
 
 ## Objective
 
-Replace `omakei-ledger.json` with `omakei-ledger.sqlite` in the attached folder,
+Replace `omakei-ledger.json` with `omakei-ledger.sqlite` (since
+omarchy-plugin-marketplace#7136, in a private mode-0700 directory under the
+state dir rather than the attached folder: SQLite opens by name and follows
+links, so only a directory nobody else can write is safe to open it in),
 for two reasons the JSON could not meet:
 
 1. **The query rules live in the file.** `docs/ledger.md`'s rules 1–3 (transfers

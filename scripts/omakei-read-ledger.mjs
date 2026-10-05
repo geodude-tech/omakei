@@ -43,12 +43,14 @@
  * error, and a bar that reads `null` and renders empty is the correct outcome
  * for every failure here.
  */
+import { lstat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
   DB_FILENAME,
   MAX_STATE_BYTES,
   expandHome,
+  ledgerDirFor,
   parseStateFile,
   readCapped,
   stateDirFor,
@@ -80,13 +82,24 @@ function uncategorizedFor(ledger) {
   }
 }
 
-/** The folder whose database to read. */
+/**
+ * The folder whose database to read: the override's, or the private ledger
+ * directory of the attached folder. Until the server or `omakei-categorize.mjs`
+ * has carried an older ledger over from the attached folder, that folder is
+ * read instead (read-only, as always), so the bar does not go blank on upgrade.
+ */
 async function resolveDir(override, env, home) {
   const wanted = expandHome(override, home);
   if (wanted) return basename(wanted) === DB_FILENAME ? dirname(wanted) : wanted;
   const raw = await readCapped(join(stateDirFor(env, home), "state.json"), MAX_STATE_BYTES);
   if (!raw) return null;
-  return parseStateFile(raw.toString("utf8"))?.statementsDir ?? null;
+  const statementsDir = parseStateFile(raw.toString("utf8"))?.statementsDir ?? null;
+  if (!statementsDir) return null;
+  const ledgerDir = ledgerDirFor(statementsDir, env, home);
+  const legacy = join(statementsDir, DB_FILENAME);
+  const hasPrivate = await lstat(join(ledgerDir, DB_FILENAME)).then(() => true, () => false);
+  const hasLegacy = !hasPrivate && (await lstat(legacy).then(() => true, () => false));
+  return hasLegacy ? statementsDir : ledgerDir;
 }
 
 /** `env` and `home` are parameters for the same reason they are in

@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { renderStateFile } from "./ledger-api.mjs";
+import { ledgerDirFor, prepareLedgerDir, renderStateFile } from "./ledger-api.mjs";
 import { readLedgerDb, updateLedgerDb } from "./ledger-db.mjs";
 
 const temps = [];
@@ -41,7 +41,8 @@ function txOf(id, description, amount) {
 /** A home with a state file pointing at a statements folder that holds a ledger. */
 async function attachedLedger(snapshot) {
   const found = attachedFolder();
-  await updateLedgerDb(found.statements, () => ({
+  await prepareLedgerDir(found.statements, { env: found.env, home: found.home });
+  await updateLedgerDb(found.ledgerDir, () => ({
     version: 1,
     selectedMonth: "2026-08",
     transactions: snapshot,
@@ -59,8 +60,10 @@ function attachedFolder() {
   mkdirSync(statements, { recursive: true });
   const stateDir = join(home, ".local", "state", "omakei");
   mkdirSync(stateDir, { recursive: true });
-  writeFileSync(join(stateDir, "state.json"), renderStateFile(statements));
-  return { home, statements, revisionPath: join(stateDir, "ledger-revision") };
+  const env = { XDG_STATE_HOME: join(home, ".local", "state") };
+  const ledgerDir = ledgerDirFor(statements, env, home);
+  writeFileSync(join(stateDir, "state.json"), renderStateFile(statements, ledgerDir));
+  return { home, env, statements, ledgerDir, revisionPath: join(stateDir, "ledger-revision") };
 }
 
 /** Run the CLI; returns { status, stdout, stderr }. */
@@ -90,18 +93,18 @@ async function unchanged(dir, before) {
 }
 
 test("adding a rule re-tags matching rows and leaves the defaults alone", async () => {
-  const { home, statements, revisionPath } = await attachedLedger(TX);
+  const { home, ledgerDir, revisionPath } = await attachedLedger(TX);
   const { status, stdout } = cli(["zorp widgets", "shopping"], home);
   assert.equal(status, 0);
   assert.match(stdout, /2 transactions re-tagged/);
 
-  assert.deepEqual(await categories(statements), {
+  assert.deepEqual(await categories(ledgerDir), {
     a: "coffee", // default, untouched
     b: "shopping", // the new rule
     c: "shopping",
     d: "subscriptions", // default, untouched
   });
-  const written = await readLedger(statements);
+  const written = await readLedger(ledgerDir);
   assert.deepEqual(
     written.rules.map((r) => [r.pattern, r.categoryId, r.source]),
     [["zorp widgets", "shopping", "user"]],
@@ -110,48 +113,48 @@ test("adding a rule re-tags matching rows and leaves the defaults alone", async 
 });
 
 test("running the same command again changes nothing", async () => {
-  const { home, statements } = await attachedLedger(TX);
+  const { home, ledgerDir } = await attachedLedger(TX);
   cli(["zorp widgets", "shopping"], home);
-  const first = await readLedger(statements);
+  const first = await readLedger(ledgerDir);
   const { status, stdout } = cli(["zorp widgets", "shopping"], home);
   assert.equal(status, 0);
   assert.match(stdout, /0 transactions re-tagged/);
-  const second = await readLedger(statements);
+  const second = await readLedger(ledgerDir);
   assert.deepEqual(second.transactions, first.transactions);
   assert.deepEqual(second.rules, first.rules);
 });
 
 test("--remove drops the rule and reverts its rows", async () => {
-  const { home, statements } = await attachedLedger(TX);
+  const { home, ledgerDir } = await attachedLedger(TX);
   cli(["zorp widgets", "shopping"], home);
   const { status } = cli(["--remove", "zorp widgets"], home);
   assert.equal(status, 0);
-  assert.deepEqual(await categories(statements), {
+  assert.deepEqual(await categories(ledgerDir), {
     a: "coffee",
     b: null,
     c: null,
     d: "subscriptions",
   });
-  assert.deepEqual((await readLedger(statements)).rules, []);
+  assert.deepEqual((await readLedger(ledgerDir)).rules, []);
 });
 
 test("--remove on an unknown pattern fails and writes nothing", async () => {
-  const { home, statements } = await attachedLedger(TX);
-  const before = await readLedgerDb(statements);
+  const { home, ledgerDir } = await attachedLedger(TX);
+  const before = await readLedgerDb(ledgerDir);
   const { status, stderr } = cli(["--remove", "never-added"], home);
   assert.equal(status, 1);
   assert.match(stderr, /No user rule matches/);
-  await unchanged(statements, before);
+  await unchanged(ledgerDir, before);
 });
 
 test("--dry-run reports the change but leaves the ledger at the same version", async () => {
-  const { home, statements } = await attachedLedger(TX);
-  const before = await readLedgerDb(statements);
+  const { home, ledgerDir } = await attachedLedger(TX);
+  const before = await readLedgerDb(ledgerDir);
   const { status, stdout } = cli(["--dry-run", "zorp widgets", "shopping"], home);
   assert.equal(status, 0);
   assert.match(stdout, /2 transactions re-tagged/);
   assert.match(stdout, /nothing written/);
-  await unchanged(statements, before);
+  await unchanged(ledgerDir, before);
 });
 
 test("--list prints uncategorized merchants, biggest first", async () => {
@@ -180,21 +183,21 @@ test("--list --json says nothing with an empty array, not a sentence", async () 
 });
 
 test("--json without --list is refused rather than ignored", async () => {
-  const { home, statements } = await attachedLedger(TX);
-  const before = await readLedgerDb(statements);
+  const { home, ledgerDir } = await attachedLedger(TX);
+  const before = await readLedgerDb(ledgerDir);
   const { status, stderr } = cli(["--json", "zorp widgets", "shopping"], home);
   assert.equal(status, 1);
   assert.match(stderr, /--json only applies to --list/);
-  await unchanged(statements, before);
+  await unchanged(ledgerDir, before);
 });
 
 test("an unknown category id fails and writes nothing", async () => {
-  const { home, statements } = await attachedLedger(TX);
-  const before = await readLedgerDb(statements);
+  const { home, ledgerDir } = await attachedLedger(TX);
+  const before = await readLedgerDb(ledgerDir);
   const { status, stderr } = cli(["zorp widgets", "nonsense"], home);
   assert.equal(status, 1);
   assert.match(stderr, /Unknown category/);
-  await unchanged(statements, before);
+  await unchanged(ledgerDir, before);
 });
 
 test("no attached folder fails cleanly", () => {
@@ -206,30 +209,31 @@ test("no attached folder fails cleanly", () => {
 });
 
 test("an attached folder with no ledger at all fails cleanly and creates nothing", () => {
-  const { home, statements } = attachedFolder();
+  const { home, statements, ledgerDir } = attachedFolder();
   const { status, stderr } = cli(["zorp widgets", "shopping"], home);
   assert.equal(status, 1);
   assert.match(stderr, /Could not read/);
   assert.equal(existsSync(join(statements, "omakei-ledger.sqlite")), false);
+  assert.equal(existsSync(join(ledgerDir, "omakei-ledger.sqlite")), false);
 });
 
 test("a save the editor derived before the rule was written cannot undo it", async () => {
-  const { home, statements } = await attachedLedger(TX);
+  const { home, ledgerDir } = await attachedLedger(TX);
   // What the editor holds: the ledger and version it read when the tab opened.
-  const editor = await readLedgerDb(statements);
+  const editor = await readLedgerDb(ledgerDir);
 
   assert.equal(cli(["zorp widgets", "shopping"], home).status, 0);
 
-  const late = await updateLedgerDb(statements, ({ etag }) =>
+  const late = await updateLedgerDb(ledgerDir, ({ etag }) =>
     etag === editor.etag ? { ...editor.ledger, selectedMonth: "2026-09" } : null,
   );
   assert.equal(late.written, false, "the server refuses it; the editor merges and retries");
-  assert.equal((await categories(statements)).b, "shopping", "the rule survives");
+  assert.equal((await categories(ledgerDir)).b, "shopping", "the rule survives");
   assert.deepEqual(late.ledger.rules.map((r) => r.pattern), ["zorp widgets"]);
 });
 
 test("CHECK <category> pins the outstanding checks and writes no rule", async () => {
-  const { home, statements } = await attachedLedger([
+  const { home, ledgerDir } = await attachedLedger([
     txOf("k1", "CHECK", -2380.26),
     txOf("k2", "CHECK", -2496.62),
     ...TX,
@@ -238,31 +242,31 @@ test("CHECK <category> pins the outstanding checks and writes no rule", async ()
   assert.equal(status, 0);
   assert.match(stdout, /Pinned 2 transactions → childcare \(no rule written\)/);
 
-  assert.deepEqual((await readLedger(statements)).rules, []);
-  const cats = await categories(statements);
+  assert.deepEqual((await readLedger(ledgerDir)).rules, []);
+  const cats = await categories(ledgerDir);
   assert.equal(cats.k1, "childcare");
   assert.equal(cats.k2, "childcare");
   assert.equal(cats.b, null, "other merchants untouched");
-  const k1 = (await readLedger(statements)).transactions.find((t) => t.id === "k1");
+  const k1 = (await readLedger(ledgerDir)).transactions.find((t) => t.id === "k1");
   assert.equal(k1.pinnedCategoryId, "childcare", "the pin is stored, not just the category");
 
   // Another rule write re-derives everything; the pins hold, and there is
   // nothing left under CHECK to pin.
   cli(["zorp widgets", "shopping"], home);
-  assert.equal((await categories(statements)).k1, "childcare");
+  assert.equal((await categories(ledgerDir)).k1, "childcare");
   const again = cli(["CHECK", "childcare"], home);
   assert.equal(again.status, 1);
   assert.match(again.stderr, /Nothing under "CHECK" needs a category/);
 });
 
 test("--pin categorizes one transaction by id, and an unknown id writes nothing", async () => {
-  const { home, statements } = await attachedLedger([txOf("k1", "CHECK", -10), txOf("k2", "CHECK", -20)]);
+  const { home, ledgerDir } = await attachedLedger([txOf("k1", "CHECK", -10), txOf("k2", "CHECK", -20)]);
   assert.equal(cli(["--pin", "k2", "gifts"], home).status, 1, "unknown category refused");
   assert.equal(cli(["--pin", "k2", "shopping"], home).status, 0);
-  assert.deepEqual(await categories(statements), { k1: null, k2: "shopping" });
+  assert.deepEqual(await categories(ledgerDir), { k1: null, k2: "shopping" });
 
-  const before = await readLedgerDb(statements);
+  const before = await readLedgerDb(ledgerDir);
   const missing = cli(["--pin", "nope", "shopping"], home);
   assert.equal(missing.status, 1);
-  await unchanged(statements, before);
+  await unchanged(ledgerDir, before);
 });

@@ -12,7 +12,12 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createLedgerApi, isLoopbackHost, isLoopbackSocket } from "./ledger-api.mjs";
+import {
+  createLedgerApi,
+  isLoopbackHost,
+  isLoopbackSocket,
+  isSameUserPeer,
+} from "./ledger-api.mjs";
 import { renderShell } from "./page-shell.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -88,6 +93,13 @@ const server = createServer(async (req, res) => {
     if (!isLoopbackSocket(req) || !isLoopbackHost(req.headers?.host)) {
       res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
       res.end("Omakei is reachable from this machine only\n");
+      return;
+    }
+    // Loopback is every account on the machine. The shell carries the ledger,
+    // so the page answers only to a connection the user running Omakei opened.
+    if (!(await isSameUserPeer(req))) {
+      res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+      res.end("Omakei answers only to the user running it\n");
       return;
     }
     if (await api.handle(req, res)) return;

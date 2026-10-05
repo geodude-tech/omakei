@@ -16,6 +16,7 @@ import {
   mkdirSync,
   chmodSync,
   existsSync,
+  statSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -25,9 +26,12 @@ import {
   createLedgerApi,
   isAllowedOrigin,
   isLoopbackHost,
+  isSameUserPeer,
+  ledgerDirFor,
   parseStateFile,
   renderStateFile,
   safeJoin,
+  socketOwnerFrom,
   withDir,
   writeAtomic,
 } from "./ledger-api.mjs";
@@ -37,6 +41,10 @@ import { readLedgerDb, updateLedgerDb } from "./ledger-db.mjs";
 const writeUnderneath = (dir, ledger) => updateLedgerDb(dir, () => ledger);
 
 const temps = [];
+
+/** Where the server under `home` keeps the ledger for `statements`. */
+const ledgerDir = (home, statements) => ledgerDirFor(statements, { XDG_STATE_HOME: join(home, ".state") }, home);
+const ledgerFile = (home, statements) => join(ledgerDir(home, statements), "omakei-ledger.sqlite");
 
 function tempTree() {
   const root = mkdtempSync(join(tmpdir(), "omakei-api-"));
@@ -52,10 +60,11 @@ after(() => {
 });
 
 /** Start the handler on a loopback port and return a fetch bound to it. */
-async function serve(home) {
+async function serve(home, options = {}) {
   const api = createLedgerApi({
     env: { XDG_STATE_HOME: join(home, ".state") },
     home,
+    ...options,
   });
   const server = createServer((req, res) => {
     api.handle(req, res).then((handled) => {
@@ -126,11 +135,12 @@ test("attaching a folder makes the ledger readable, writable, and findable", asy
     state = await attached.json();
     assert.equal(state.folder.path, statements);
     assert.equal(state.folder.name, "Statements");
-    assert.equal(state.ledgerPath, join(statements, "omakei-ledger.sqlite"));
+    assert.equal(state.ledgerPath, ledgerFile(home, statements));
 
     // The state file the widget reads now points at that ledger.
     const recorded = parseStateFile(readFileSync(s.api.statePath, "utf8"));
     assert.equal(recorded.statementsDir, statements);
+    assert.equal(JSON.parse(readFileSync(s.api.statePath, "utf8")).ledgerPath, ledgerFile(home, statements));
 
     // Statements are listed, subfolders included, with stable relative paths.
     const listing = await (await s.call("/statements")).json();
@@ -153,7 +163,7 @@ test("attaching a folder makes the ledger readable, writable, and findable", asy
     };
     const put = await putLedger(s, ledger);
     assert.equal(put.status, 200);
-    const { ledger: onDisk } = await readLedgerDb(statements);
+    const { ledger: onDisk } = await readLedgerDb(ledgerDir(home, statements));
     assert.equal(onDisk.transactions[0].id, "a");
 
     // And comes straight back on the next open.
@@ -268,6 +278,7 @@ test("a malformed ledger never reaches disk", async () => {
       assert.equal(res.status, 400);
     }
     assert.equal(existsSync(join(statements, "omakei-ledger.sqlite")), false);
+    assert.equal(existsSync(ledgerFile(home, statements)), false);
   } finally {
     await s.close();
   }
@@ -426,7 +437,7 @@ test("a state file from before SQLite is brought up to date, keeping its folder"
   assert.equal((await api.stateBody()).folder.path, statements);
   const now = JSON.parse(readFileSync(api.statePath, "utf8"));
   assert.equal(now.statementsDir, statements);
-  assert.equal(now.ledgerPath, join(statements, "omakei-ledger.sqlite"), "an agent reading ledgerPath finds the live ledger");
+  assert.equal(now.ledgerPath, ledgerFile(home, statements), "an agent reading ledgerPath finds the live ledger");
 });
 
 test("a separate XDG_STATE_HOME leaves the real state file untouched", async () => {
@@ -470,8 +481,8 @@ async function attached(home, statements) {
 test("a symlink in place of the ledger is not followed", async () => {
   const { root, home, statements } = tempTree();
   const secret = join(root, "secret");
-  mkdirSync(secret);
-  await updateLedgerDb(secret, () => ({ version: 1, transactions: [{ id: "leaked" }], rules: [] }));
+  mkdirSync(secret, { mode: 0o700 });
+  assert.ok(await updateLedgerDb(secret, () => ({ version: 1, transactions: [{ id: "leaked" }], rules: [] })));
   const s = await attached(home, statements);
   try {
     symlinkSync(join(secret, "omakei-ledger.sqlite"), join(statements, "omakei-ledger.sqlite"));
@@ -486,8 +497,8 @@ test("a ledger larger than the cap never enters the server", async () => {
   const { home, statements } = tempTree();
   const s = await attached(home, statements);
   try {
-    await updateLedgerDb(statements, () => ({ version: 1, transactions: [{ id: "a" }], rules: [] }));
-    const path = join(statements, "omakei-ledger.sqlite");
+    await updateLedgerDb(ledgerDir(home, statements), () => ({ version: 1, transactions: [{ id: "a" }], rules: [] }));
+    const path = ledgerFile(home, statements);
     truncateSync(path, 20 * 1024 * 1024 + 1);
     const state = await (await s.call("/state")).json();
     assert.equal(state.ledger, null, "an oversized ledger is refused, not parsed");
@@ -564,7 +575,7 @@ test("a symlink at the predictable temp path cannot capture the write", async ()
     const put = await putLedger(s, { version: 1, transactions: [], rules: [], selectedMonth: "2026-08" });
     assert.equal(put.status, 200);
     assert.equal(readFileSync(canary, "utf8"), "untouched", "the write must not follow the planted link");
-    assert.equal((await readLedgerDb(statements)).ledger.selectedMonth, "2026-08");
+    assert.equal((await readLedgerDb(ledgerDir(home, statements))).ledger.selectedMonth, "2026-08");
   } finally {
     await s.close();
   }
@@ -576,7 +587,7 @@ test("a symlinked destination is refused, not written through", async () => {
   writeFileSync(canary, "untouched");
   const s = await attached(home, statements);
   try {
-    const dest = join(statements, "omakei-ledger.sqlite");
+    const dest = ledgerFile(home, statements);
     symlinkSync(canary, dest);
     const put = await putLedger(s, { version: 1, transactions: [], rules: [], selectedMonth: "2026-08" }, "");
     assert.equal(put.status, 409, "SQLite would follow the link, so the write is refused instead");
@@ -782,7 +793,8 @@ test("path and header helpers", () => {
   assert.equal(isAllowedOrigin("null", "PUT"), false);
   assert.equal(isAllowedOrigin("http://127.0.0.1:8080", "POST"), true);
 
-  assert.match(renderStateFile("/s"), /"ledgerPath":"\/s\/omakei-ledger\.sqlite"/);
+  assert.match(renderStateFile("/s", "/l"), /"ledgerPath":"\/l\/omakei-ledger\.sqlite"/);
+  assert.match(renderStateFile("/s"), /"ledgerPath":""/);
   assert.equal(parseStateFile(renderStateFile("")), null);
 });
 
@@ -800,13 +812,13 @@ test("a save derived from a stale ledger is refused, and changes nothing", async
     // Something else writes the ledger — this is `omakei-categorize.mjs`, which
     // writes the same database and knows nothing about the server.
     const theirs = { ...base, rules: [{ id: "r1", pattern: "co-op", categoryId: "groceries", createdAt: 1, source: "user" }] };
-    await writeUnderneath(statements, theirs);
+    await writeUnderneath(ledgerDir(home, statements), theirs);
 
     // The editor still holds what it read before that, and saves it.
     const late = await putLedger(s, { ...base, selectedMonth: "2026-09" }, staleEtag);
     assert.equal(late.status, 412, "a save against a version that has moved on is refused");
 
-    const { ledger: onDisk } = await readLedgerDb(statements);
+    const { ledger: onDisk } = await readLedgerDb(ledgerDir(home, statements));
     assert.equal(onDisk.rules.length, 1, "the rule written underneath survives");
     assert.equal(onDisk.rules[0].pattern, "co-op");
     assert.equal(onDisk.selectedMonth, "2026-08", "and the stale save landed nowhere");
@@ -823,7 +835,7 @@ test("a refused save hands back what it lost to, so a client can merge in one tr
     const stale = (await (await putLedger(s, base)).json()).etag;
 
     const theirs = { ...base, transactions: [{ id: "t1", date: "2026-08-02", amount: -4.5 }] };
-    await writeUnderneath(statements, theirs);
+    await writeUnderneath(ledgerDir(home, statements), theirs);
 
     const refused = await putLedger(s, base, stale);
     assert.equal(refused.status, 412);
@@ -850,6 +862,7 @@ test("a save with no If-Match at all is refused", async () => {
     });
     assert.equal(res.status, 428, "a blind write is the bug; there is no opting out of the check");
     assert.equal(existsSync(join(statements, "omakei-ledger.sqlite")), false);
+    assert.equal(existsSync(ledgerFile(home, statements)), false);
   } finally {
     await s.close();
   }
@@ -907,6 +920,132 @@ test("a ledger the database cannot store is a 400, and nothing changes", async (
     const state = await (await s.call("/state")).json();
     assert.equal(state.ledgerEtag, etag);
     assert.deepEqual(state.ledger.transactions, []);
+  } finally {
+    await s.close();
+  }
+});
+
+/* ------------------------------------------ omarchy-plugin-marketplace#7136
+ *
+ * Loopback is every account on the machine. A request with a loopback Host and
+ * no Origin is exactly what another local user's `curl` sends, so the server
+ * has to know who opened the connection, not only where it came from.
+ */
+
+test("a connection from another local user reads nothing", async () => {
+  const { home, statements } = tempTree();
+  writeFileSync(join(statements, "checking.csv"), "Date,Description,Amount\n2026-08-02,SHOP,-2\n");
+  const owner = await attached(home, statements);
+  await owner.close();
+  // The same server, run by someone this test process is not.
+  const s = await serve(home, { ownerUid: process.getuid() + 1 });
+  try {
+    for (const path of ["/state", "/statements", "/statements/file?path=checking.csv", "/browse"]) {
+      const res = await s.call(path);
+      assert.equal(res.status, 403, `${path} must not answer another user`);
+      assert.doesNotMatch(await res.text(), /SHOP|Statements/);
+    }
+    const put = await putLedger(s, { version: 1, transactions: [], rules: [] }, "");
+    assert.equal(put.status, 403);
+  } finally {
+    await s.close();
+  }
+});
+
+test("the user running the server is let in by the kernel's own record of the socket", async () => {
+  const { home, statements } = tempTree();
+  writeFileSync(join(statements, "checking.csv"), "Date,Description,Amount\n2026-08-02,SHOP,-2\n");
+  const s = await attached(home, statements);
+  try {
+    const res = await s.call("/statements/file?path=checking.csv");
+    assert.equal(res.status, 200);
+  } finally {
+    await s.close();
+  }
+});
+
+test("isSameUserPeer refuses a request with no socket to ask about", async () => {
+  assert.equal(await isSameUserPeer({}), false);
+  assert.equal(await isSameUserPeer({ socket: {} }, undefined), false);
+});
+
+test("the socket owner is the client's end, never the server's mirror of it", () => {
+  const header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
+  // 127.0.0.1:8080 is 0100007F:1F90; the client's port 51000 is C738.
+  const tcp = [
+    header,
+    "   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 1 1",
+    "   1: 0100007F:1F90 0100007F:C738 01 00000000:00000000 00:00000000 00000000  1000        0 2 1",
+    "   2: 0100007F:C738 0100007F:1F90 01 00000000:00000000 00:00000000 00000000  1001        0 3 1",
+  ].join("\n");
+  const ends = { localAddress: "127.0.0.1", localPort: 8080, remoteAddress: "127.0.0.1", remotePort: 51000 };
+  assert.equal(socketOwnerFrom([tcp, ""], ends), 1001, "the mirror line carries the server's uid and must not match");
+
+  // A dual-stack server sees a v4-mapped peer whose own socket is plain IPv4.
+  const mapped = { ...ends, localAddress: "::ffff:127.0.0.1", remoteAddress: "::ffff:127.0.0.1" };
+  assert.equal(socketOwnerFrom([tcp, ""], mapped), 1001);
+
+  // ::1 over tcp6.
+  const one = "00000000000000000000000001000000";
+  const tcp6 = [header, `   0: ${one}:C738 ${one}:1F90 01 00000000:00000000 00:00000000 00000000  1002        0 4 1`].join("\n");
+  assert.equal(socketOwnerFrom(["", tcp6], { ...ends, localAddress: "::1", remoteAddress: "::1" }), 1002);
+
+  // No such socket listed: nobody to let in.
+  assert.equal(socketOwnerFrom([tcp, tcp6], { ...ends, remotePort: 51001 }), null);
+});
+
+/*
+ * The ledger is written only inside a private directory, never in the attached
+ * folder, so nothing in that folder can redirect SQLite's write.
+ */
+
+test("the ledger is written into a private directory, not the attached folder", async () => {
+  const { home, statements } = tempTree();
+  const s = await attached(home, statements);
+  try {
+    const put = await putLedger(s, { version: 1, transactions: [], rules: [], selectedMonth: "2026-08" });
+    assert.equal(put.status, 200);
+    assert.equal(existsSync(join(statements, "omakei-ledger.sqlite")), false);
+    const dir = ledgerDir(home, statements);
+    assert.equal(statSync(dir).mode & 0o777, 0o700);
+    assert.equal(statSync(join(dir, "..")).mode & 0o777, 0o700);
+    assert.equal(statSync(ledgerFile(home, statements)).mode & 0o777, 0o600);
+  } finally {
+    await s.close();
+  }
+});
+
+test("a link planted in the attached folder cannot capture the ledger write", async () => {
+  const { root, home, statements } = tempTree();
+  const canary = join(root, "canary.sqlite");
+  writeFileSync(canary, "untouched");
+  const s = await attached(home, statements);
+  try {
+    symlinkSync(canary, join(statements, "omakei-ledger.sqlite"));
+    const put = await putLedger(s, { version: 1, transactions: [], rules: [], selectedMonth: "2026-08" });
+    assert.equal(put.status, 200);
+    assert.equal(readFileSync(canary, "utf8"), "untouched");
+    assert.equal((await readLedgerDb(ledgerDir(home, statements))).ledger.selectedMonth, "2026-08");
+  } finally {
+    await s.close();
+  }
+});
+
+test("a ledger left in the attached folder is carried over once and left in place", async () => {
+  const { root, home, statements } = tempTree();
+  const old = join(root, "old");
+  mkdirSync(old, { mode: 0o700 });
+  await updateLedgerDb(old, () => ({ version: 1, transactions: [{ id: "kept" }], rules: [] }));
+  writeFileSync(join(statements, "omakei-ledger.sqlite"), readFileSync(join(old, "omakei-ledger.sqlite")));
+  const before = readFileSync(join(statements, "omakei-ledger.sqlite"));
+  const s = await attached(home, statements);
+  try {
+    const state = await (await s.call("/state")).json();
+    assert.deepEqual(state.ledger.transactions.map((t) => t.id), ["kept"]);
+    const put = await putLedger(s, { version: 1, transactions: [{ id: "new" }], rules: [] });
+    assert.equal(put.status, 200);
+    assert.deepEqual((await readLedgerDb(ledgerDir(home, statements))).ledger.transactions.map((t) => t.id), ["new"]);
+    assert.deepEqual(readFileSync(join(statements, "omakei-ledger.sqlite")), before, "the old file is not written");
   } finally {
     await s.close();
   }
