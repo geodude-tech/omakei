@@ -7,7 +7,9 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -164,6 +166,42 @@ test("a symlink in place of the database is refused, for reading and writing", a
   symlinkSync(join(elsewhere, DB_FILENAME), join(dir, DB_FILENAME));
   assert.equal(await readLedgerDb(dir), null);
   assert.equal(await write(dir, LEDGER), null);
+});
+
+/*
+ * omarchy-plugin-marketplace#7136: SQLite opens by pathname and follows links,
+ * so checking the name in a folder someone else can write and then opening it
+ * is a race. A writable open is allowed only where nobody else can write.
+ */
+test("a write outside a private directory is refused and creates nothing", async () => {
+  const dir = folder();
+  chmodSync(dir, 0o755);
+  assert.equal(await write(dir, LEDGER), null, "a folder others can list is not where the ledger is written");
+  chmodSync(dir, 0o770);
+  assert.equal(await write(dir, LEDGER), null, "nor one a group can write into");
+  assert.equal(existsSync(join(dir, DB_FILENAME)), false);
+  chmodSync(dir, 0o700);
+  assert.ok(await write(dir, LEDGER), "the same folder, private, is fine");
+});
+
+test("a private directory under one others can rename it out of is refused", async () => {
+  const parent = folder();
+  chmodSync(parent, 0o777);
+  const dir = join(parent, "ledger");
+  mkdirSync(dir, { mode: 0o700 });
+  assert.equal(await write(dir, LEDGER), null);
+  assert.equal(existsSync(join(dir, DB_FILENAME)), false);
+  chmodSync(parent, 0o1777);
+  assert.ok(await write(dir, LEDGER), "a sticky parent, like /tmp, cannot have our entries renamed");
+});
+
+test("a symlink in place of the private directory is not followed for a write", async () => {
+  const real = folder();
+  const parent = folder();
+  const link = join(parent, "ledger");
+  symlinkSync(real, link);
+  assert.equal(await write(link, LEDGER), null);
+  assert.equal(existsSync(join(real, DB_FILENAME)), false);
 });
 
 test("a FIFO in place of the database is refused without blocking", async () => {

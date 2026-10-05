@@ -7,7 +7,8 @@ _Status: documents existing behavior as of 2026-08-28. Traces to `docs/intent/om
 Be the one process that touches disk. The editor is a browser page with no
 filesystem of its own, so a small Node server owns the attached folder: it
 remembers which folder it is, lists and reads the statements in it, keeps the
-ledger in `omakei-ledger.sqlite` beside them, and records the folder's real path
+ledger in `omakei-ledger.sqlite` in a private directory of its own
+(`<state>/ledgers/<id>/`, mode 0700; see `ledgerDirFor`), and records the folder's real path
 where the bar widget can find it. The database itself is
 `docs/spec/ledger-sqlite.md`.
 
@@ -247,6 +248,13 @@ theme loader that share this module.
 - Keep the loopback socket, `Host`, and `Origin` guards, and keep them in front
   of the static routes too. This is a personal ledger; nothing else on the
   network or in the browser may reach it.
+- Keep the same-user peer check (`isSameUserPeer`) in front of every route,
+  static ones included. Loopback is every account on the machine; the server
+  reads statements with its owner's permissions, so it answers only connections
+  the kernel says that owner opened (`/proc/net/tcp`), and fails closed.
+- Write the ledger only inside its private directory. `ledger-db.mjs` refuses a
+  writable open anywhere that is not owned by this user, mode 0700, with no
+  ancestor someone else could rename it out of.
 - Go through `readCapped` / `writeAtomic` for every disk touch. If the widget or
   anything else needs something new off disk, add it here — do not open a second
   path.
@@ -255,8 +263,7 @@ theme loader that share this module.
 
 **Ask first:**
 - Adding a route, or a key to `state.json`.
-- Writing anything into the user's folder that is not `omakei-ledger.sqlite`
-  (also an open question in the ledger-contract spec).
+- Writing anything into the user's folder. The ledger no longer lives there.
 - Raising a cap.
 
 **Never:**

@@ -3,8 +3,9 @@
  *
  * The editor is a browser page with no filesystem of its own, so the server
  * owns the attached folder: it remembers which folder that is, lists and reads
- * the statements in it, and keeps the ledger beside them in
- * `omakei-ledger.sqlite` (see `ledger-db.mjs`). Both the
+ * the statements in it, and keeps that folder's ledger in
+ * `omakei-ledger.sqlite` under a private directory of the state dir (see
+ * `ledgerDirFor` and `ledger-db.mjs`). Both the
  * Vite dev server and `omakei-serve.mjs` mount this same handler, so what you
  * see in development is what an installer runs.
  *
@@ -16,8 +17,8 @@
  * `npm install`.
  */
 import { constants as FS } from "node:fs";
-import { mkdir, open, readdir, rename, stat, unlink } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
+import { link, lstat, mkdir, open, readFile, readdir, rename, stat, unlink } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { LedgerShapeError, readLedgerDb, updateLedgerDb } from "./ledger-db.mjs";
@@ -42,6 +43,29 @@ export function stateDirFor(env = process.env, home = homedir()) {
   return join(env.XDG_STATE_HOME || join(home, ".local/state"), "omakei");
 }
 
+/**
+ * Where the ledger for `statementsDir` lives: a directory of its own under
+ * `<state>/ledgers/`, created mode 0700.
+ *
+ * The ledger used to sit in the attached folder. That folder is the user's to
+ * choose -- a synced or mounted directory, possibly writable by something
+ * else -- and SQLite opens by pathname, follows symlinks, and has no
+ * `SQLITE_OPEN_NOFOLLOW` in `node:sqlite`. Nothing can check a name in a folder
+ * someone else can rename into and then have SQLite open that same file. A
+ * directory only this user can write has no one to race, so the writable
+ * database and its journal live there, and `ledger-db.mjs` refuses to write
+ * anywhere that is not private like this.
+ *
+ * Keyed by the folder's path, so attaching a different folder still means a
+ * different ledger, as it did when the ledger sat inside it.
+ */
+export function ledgerDirFor(statementsDir, env = process.env, home = homedir()) {
+  const key = createHash("sha256").update(resolve(String(statementsDir))).digest("hex").slice(0, 16);
+  return join(stateDirFor(env, home), LEDGERS_DIRNAME, key);
+}
+
+export const LEDGERS_DIRNAME = "ledgers";
+
 export function expandHome(path, home) {
   const p = String(path || "").trim();
   const root = String(home || "");
@@ -64,6 +88,98 @@ export function safeJoin(root, rel) {
 export function isLoopbackSocket(req) {
   const addr = req.socket?.remoteAddress ?? "";
   return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
+/**
+ * `/proc/net/tcp{,6}` address, as `127.0.0.1` or `::1`, or null for anything
+ * else. IPv4 is one little-endian word; a v4-mapped IPv6 address reads as the
+ * IPv4 it carries, because a dual-stack server sees `::ffff:127.0.0.1` for a
+ * client whose own socket is plain IPv4.
+ */
+function procAddress(hex) {
+  const v4 = (h) =>
+    [h.slice(6, 8), h.slice(4, 6), h.slice(2, 4), h.slice(0, 2)].map((b) => parseInt(b, 16)).join(".");
+  const h = String(hex).toUpperCase();
+  if (/^[0-9A-F]{8}$/.test(h)) return v4(h);
+  if (h === "00000000000000000000000001000000") return "::1";
+  if (/^0000000000000000FFFF0000[0-9A-F]{8}$/.test(h)) return v4(h.slice(24));
+  return null;
+}
+
+function plainAddress(addr) {
+  const a = String(addr || "");
+  return a.toLowerCase().startsWith("::ffff:") ? a.slice(7) : a;
+}
+
+/**
+ * The uid that owns the client end of a loopback connection, read from the
+ * kernel's socket tables (`/proc/net/tcp` and `/proc/net/tcp6` text), or null
+ * when no such socket is listed.
+ *
+ * The client's socket is the one whose local end is the peer's address and
+ * port and whose remote end is ours. The server's own accepted socket is the
+ * mirror image and always carries the server's uid, so both ends are matched.
+ */
+export function socketOwnerFrom(tables, { localAddress, localPort, remoteAddress, remotePort }) {
+  const client = plainAddress(remoteAddress);
+  const server = plainAddress(localAddress);
+  for (const table of tables) {
+    for (const line of String(table || "").split("\n")) {
+      const f = line.trim().split(/\s+/);
+      if (f.length < 8 || !/^\d+:$/.test(f[0])) continue;
+      const [la, lp] = f[1].split(":");
+      const [ra, rp] = f[2].split(":");
+      if (parseInt(lp, 16) !== remotePort || parseInt(rp, 16) !== localPort) continue;
+      if (procAddress(la) !== client || procAddress(ra) !== server) continue;
+      const uid = Number(f[7]);
+      return Number.isInteger(uid) ? uid : null;
+    }
+  }
+  return null;
+}
+
+const peerChecks = new WeakMap();
+
+/**
+ * True when the process on the other end of this loopback connection runs as
+ * `uid` -- by default, the user running this server.
+ *
+ * Loopback is not the same as "this user". Any account on the machine can
+ * connect to 127.0.0.1, and the Host and Origin guards only say what a browser
+ * claims, not who is asking. The ledger and the statements are read with the
+ * server owner's permissions, so the connection has to belong to that owner.
+ * The kernel already records who opened each socket; asking it costs the
+ * browser and the widget nothing, needs no token to leak, and cannot be forged
+ * from another account.
+ *
+ * Linux only, like the `/proc/self/fd` anchoring below. Fails closed: if the
+ * owner cannot be found, the request is refused. Answered once per connection.
+ */
+export function isSameUserPeer(req, uid = process.getuid?.()) {
+  const socket = req.socket;
+  if (!socket || typeof uid !== "number") return Promise.resolve(false);
+  let checks = peerChecks.get(socket);
+  if (!checks) {
+    checks = new Map();
+    peerChecks.set(socket, checks);
+  }
+  let answer = checks.get(uid);
+  if (!answer) {
+    const ends = {
+      localAddress: socket.localAddress,
+      localPort: socket.localPort,
+      remoteAddress: socket.remoteAddress,
+      remotePort: socket.remotePort,
+    };
+    answer = Promise.all(
+      ["/proc/net/tcp", "/proc/net/tcp6"].map((p) => readFile(p, "utf8").catch(() => "")),
+    ).then(
+      (tables) => socketOwnerFrom(tables, ends) === uid,
+      () => false,
+    );
+    checks.set(uid, answer);
+  }
+  return answer;
 }
 
 /** Host header must name loopback, so a rebound DNS name cannot reach us. */
@@ -119,11 +235,11 @@ export function isLedgerPayload(value) {
 }
 
 /** The widget reads this file, so its shape is part of the plugin contract. */
-export function renderStateFile(statementsDir) {
+export function renderStateFile(statementsDir, ledgerDir = "") {
   return `${JSON.stringify({
     version: 1,
     statementsDir: statementsDir || "",
-    ledgerPath: statementsDir ? join(statementsDir, DB_FILENAME) : "",
+    ledgerPath: statementsDir && ledgerDir ? join(ledgerDir, DB_FILENAME) : "",
   })}\n`;
 }
 
@@ -282,6 +398,95 @@ async function ensureDir(dir) {
   } finally {
     await dh.close().catch(() => {});
   }
+}
+
+/**
+ * Create the private directory that holds `statementsDir`'s ledger, and carry
+ * over a ledger that still sits in the folder from before it moved. Returns the
+ * directory.
+ *
+ * `ledgers/` and the ledger's own directory are created 0700 through their
+ * parent's descriptor, opened without following a link, and tightened to 0700
+ * if they already exist looser and are ours. `ledger-db.mjs` checks the result
+ * again before every write, so a directory this could not make private is
+ * refused there rather than trusted here.
+ */
+export async function prepareLedgerDir(statementsDir, { env = process.env, home = homedir() } = {}) {
+  const stateDir = stateDirFor(env, home);
+  const ledgerDir = ledgerDirFor(statementsDir, env, home);
+  await ensureDir(stateDir);
+  await withDir(stateDir, async (state) => {
+    const ledgers = await openPrivateChild(state, LEDGERS_DIRNAME);
+    try {
+      const own = await openPrivateChild(`/proc/self/fd/${ledgers.fd}`, basename(ledgerDir));
+      await own.close().catch(() => {});
+    } finally {
+      await ledgers.close().catch(() => {});
+    }
+  });
+  await adoptLegacyLedger(statementsDir, ledgerDir);
+  return ledgerDir;
+}
+
+async function openPrivateChild(at, name) {
+  try {
+    await mkdir(`${at}/${name}`, 0o700);
+  } catch (err) {
+    if (err?.code !== "EEXIST") throw err;
+  }
+  const dh = await open(`${at}/${name}`, FS.O_RDONLY | FS.O_DIRECTORY | FS.O_NOFOLLOW);
+  try {
+    const info = await dh.stat();
+    if (info.uid === process.getuid?.() && (info.mode & 0o077) !== 0) await dh.chmod(0o700);
+    return dh;
+  } catch (err) {
+    await dh.close().catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * Copy `omakei-ledger.sqlite` out of the attached folder into the private
+ * directory, once, if the private one does not exist yet.
+ *
+ * The old file is read through the folder's descriptor with `O_NOFOLLOW`, like
+ * every other read here, so a link in its place is not followed. The copy is
+ * written to an unpredictable temp name and published with `link`, which
+ * refuses to replace a ledger another process published first. A hot journal
+ * beside the old file means it may be mid-write, so it is left for next time.
+ * The old file itself is left where it is: it is the user's.
+ */
+async function adoptLegacyLedger(statementsDir, ledgerDir) {
+  const present = await withDir(ledgerDir, (at) => lstat(`${at}/${DB_FILENAME}`)).then(
+    () => true,
+    (err) => err?.code !== "ENOENT",
+  );
+  if (present) return;
+  const legacy = join(statementsDir, DB_FILENAME);
+  const journal = await lstat(`${legacy}-journal`).then(
+    () => true,
+    () => false,
+  );
+  if (journal) return;
+  const bytes = await readCapped(legacy, MAX_LEDGER_BYTES);
+  if (!bytes || bytes.length === 0) return;
+  const tmpName = `.${DB_FILENAME}.${randomBytes(8).toString("hex")}.tmp`;
+  await withDir(ledgerDir, async (at) => {
+    let fh;
+    try {
+      fh = await open(`${at}/${tmpName}`, FS.O_WRONLY | FS.O_CREAT | FS.O_EXCL | FS.O_NOFOLLOW, 0o600);
+      await fh.writeFile(bytes);
+      await fh.sync();
+      await fh.close();
+      fh = undefined;
+      await link(`${at}/${tmpName}`, `${at}/${DB_FILENAME}`).catch((err) => {
+        if (err?.code !== "EEXIST") throw err;
+      });
+    } finally {
+      await fh?.close().catch(() => {});
+      await unlink(`${at}/${tmpName}`).catch(() => {});
+    }
+  });
 }
 
 /**
@@ -460,7 +665,7 @@ async function listStatements(root) {
  * Returns `handle(req, res) -> Promise<boolean>`; false means the request was
  * not ours and the caller should fall through to static files.
  */
-export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
+export function createLedgerApi({ env = process.env, home = homedir(), ownerUid = process.getuid?.() } = {}) {
   const stateDir = stateDirFor(env, home);
   const statePath = join(stateDir, "state.json");
   const revisionPath = join(stateDir, REVISION_FILENAME);
@@ -481,7 +686,8 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
       // as `ledgerPath`, and nothing else would ever rewrite it: it changes only
       // on attach. An agent following docs/ledger.md would then read a ledger
       // nothing writes any more, so the server brings it up to date on startup.
-      else if (saved && text !== renderStateFile(saved.statementsDir)) await persist(saved.statementsDir);
+      else if (saved && text !== renderStateFile(saved.statementsDir, ledgerDirFor(saved.statementsDir, env, home)))
+        await persist(saved.statementsDir);
     }
     return cached;
   }
@@ -489,7 +695,7 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
   async function persist(dir) {
     cached = dir;
     await ensureDir(stateDir);
-    await writeAtomic(statePath, renderStateFile(dir));
+    await writeAtomic(statePath, renderStateFile(dir, dir ? ledgerDirFor(dir, env, home) : ""));
     // Attaching or detaching changes which ledger is the current one, which is
     // as much a change to the widget as editing the ledger itself.
     await bumpRevision();
@@ -506,7 +712,7 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
    * -- reads as no ledger.
    */
   async function readLedgerAt(dir) {
-    return (await readLedgerDb(dir)) ?? { ledger: null, etag: "" };
+    return (await readLedgerDb(await prepareLedgerDir(dir, { env, home }))) ?? { ledger: null, etag: "" };
   }
 
   /**
@@ -536,7 +742,7 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
     return {
       folder: { path: dir, name: basename(dir) },
       ledger,
-      ledgerPath: join(dir, DB_FILENAME),
+      ledgerPath: join(ledgerDirFor(dir, env, home), DB_FILENAME),
       ledgerEtag: etag,
       home,
     };
@@ -548,6 +754,10 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
 
     if (!isLoopbackSocket(req) || !isLoopbackHost(req.headers?.host)) {
       deny(res, 403, "Omakei is reachable from this machine only");
+      return true;
+    }
+    if (!(await isSameUserPeer(req, ownerUid))) {
+      deny(res, 403, "Omakei answers only to the user running it");
       return true;
     }
     const method = (req.method ?? "GET").toUpperCase();
@@ -740,7 +950,8 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
         const body = await serialize(async () => {
           let result;
           try {
-            result = await updateLedgerDb(dir, ({ etag }) => (ifMatch === etag ? parsed : null));
+            const ledgerDir = await prepareLedgerDir(dir, { env, home });
+            result = await updateLedgerDb(ledgerDir, ({ etag }) => (ifMatch === etag ? parsed : null));
           } catch (err) {
             if (err instanceof LedgerShapeError) {
               return { status: 400, payload: { error: `Invalid ledger: ${err.message}` } };
@@ -749,8 +960,8 @@ export function createLedgerApi({ env = process.env, home = homedir() } = {}) {
           }
           if (!result) {
             // A link, a FIFO, or something that is not an Omakei ledger sits where
-            // the ledger goes. It is not written through and not replaced: the
-            // user put it there, or something did, and either way it is theirs.
+            // the ledger goes, or its directory is not private to this user. It
+            // is not written through and not replaced.
             return { status: 409, payload: { error: "The ledger in this folder cannot be opened safely" } };
           }
           if (!result.written) {

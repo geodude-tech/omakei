@@ -1,5 +1,5 @@
 /**
- * The ledger, as a SQLite database in the attached folder.
+ * The ledger, as a SQLite database in a private directory (`ledgerDirFor`).
  *
  * `omakei-ledger.json` used to be the ledger. It had two writers that could not
  * lock it -- the server and `omakei-categorize.mjs` -- so a write could only
@@ -15,9 +15,9 @@
  * Built-in `node:sqlite` only: installers never run `npm install`.
  */
 import { DatabaseSync } from "node:sqlite";
-import { chmodSync, lstatSync } from "node:fs";
+import { chmodSync, closeSync, constants as FS, fstatSync, lstatSync, openSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DB_FILENAME, MAX_LEDGER_BYTES, isLedgerPayload } from "./ledger-api.mjs";
 import { CATEGORIES, TRANSFER_CATEGORY } from "../src/lib/finance/categories.ts";
 
@@ -148,9 +148,10 @@ export class LedgerShapeError extends Error {}
  *
  * SQLite opens by pathname and follows a symlink, and `node:sqlite` has no
  * `SQLITE_OPEN_NOFOLLOW`, so a link in place of the ledger is refused here
- * before SQLite sees it. The folder is the user's own: this keeps a stray link
- * from turning some other file into the ledger. It does not try to win a race
- * against something swapping files in that folder while it is being opened.
+ * before SQLite sees it. On its own that is only a check of a name, which
+ * something able to write the directory could swap before SQLite opens it.
+ * That is why a writable open also requires `privateDir`: in a directory only
+ * this user can change, there is nobody to swap it.
  */
 function inspectDb(path) {
   let info;
@@ -163,16 +164,85 @@ function inspectDb(path) {
 }
 
 /**
+ * Whether every directory above `dir` is safe from renames by anyone but this
+ * user: owned by this user or root, and not group- or other-writable unless
+ * sticky (as `/tmp` is, where others cannot rename what is ours).
+ */
+function ancestorsAreSafe(dir, uid) {
+  let at = dirname(dir);
+  for (;;) {
+    let info;
+    try {
+      info = statSync(at);
+    } catch {
+      return false;
+    }
+    if (info.uid !== uid && info.uid !== 0) return false;
+    if ((info.mode & 0o022) !== 0 && (info.mode & 0o1000) === 0) return false;
+    const up = dirname(at);
+    if (up === at) return true;
+    at = up;
+  }
+}
+
+/**
+ * `dir`, opened without following a link and held open, if only this user can
+ * change what is in it: owned by this user, mode 0700 or tighter, with no
+ * ancestor anyone else could rename it out from under. Null otherwise.
+ *
+ * This is what makes it safe for SQLite to open the database by name: the
+ * journal it creates and deletes beside it, and the database itself, sit in a
+ * directory nobody else can write. The descriptor is retained so `openDb` can
+ * fail if the directory at that path is no longer the one checked.
+ */
+function privateDir(dir) {
+  const uid = process.getuid?.();
+  if (typeof uid !== "number") return null;
+  let fd;
+  try {
+    fd = openSync(dir, FS.O_RDONLY | FS.O_DIRECTORY | FS.O_NOFOLLOW);
+    const info = fstatSync(fd);
+    if (info.uid === uid && (info.mode & 0o077) === 0 && ancestorsAreSafe(dir, uid)) return { fd, info };
+  } catch {
+    /* refused below */
+  }
+  if (fd !== undefined) closeSync(fd);
+  return null;
+}
+
+function sameFile(a, b) {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+/**
  * The database in `dir`, or null when there is none (and `create` is false) or
  * what is there is refused.
+ *
+ * A writable open is refused outside a private directory (`privateDir`). That
+ * is the line between the ledger and whatever folder the user attached: the
+ * statements folder may be shared, synced, or mounted, and a pathname check
+ * there cannot stop SQLite's read/write transaction from following a swapped-in
+ * link. A read-only open keeps the old rules, so the widget's `ledgerPath`
+ * override can still point at a ledger kept elsewhere.
  */
 function openDb(dir, { readOnly = false, create = false } = {}) {
   const path = join(dir, DB_FILENAME);
-  const found = inspectDb(path);
-  if (found === "refused" || (found === "missing" && !create)) return null;
+  let held = null;
+  if (!readOnly) {
+    held = privateDir(dir);
+    if (!held) return null;
+  }
   let db;
   try {
+    const found = inspectDb(path);
+    if (found === "refused" || (found === "missing" && !create)) return null;
     db = new DatabaseSync(path, { readOnly, timeout: BUSY_TIMEOUT_MS, allowExtension: false });
+    // The directory SQLite just opened into has to be the one checked, and
+    // what it opened has to be a regular file. Neither can change from here
+    // on, because nobody else can write the directory; this catches the case
+    // where it changed before.
+    if (held && !sameFile(lstatSync(dir), held.info)) throw new Error("ledger directory changed");
+    if (held && !lstatSync(path).isFile()) throw new Error("ledger is not a regular file");
     // SQLite creates the file with the process umask (0644 here), where every
     // other file Omakei writes is 0600. It gives its journal the database's
     // mode, so setting it once on creation covers both.
@@ -188,6 +258,8 @@ function openDb(dir, { readOnly = false, create = false } = {}) {
       /* not open */
     }
     return null;
+  } finally {
+    if (held) closeSync(held.fd);
   }
 }
 
@@ -386,7 +458,8 @@ export async function readLedgerDb(dir) {
  * Resolves `{ written: true, ledger, etag }` with the snapshot `decide` returned
  * and the new etag, or `{ written: false, ledger, etag }` with the untouched
  * current ledger. Rejects with `LedgerShapeError` for a snapshot that cannot be
- * stored, and resolves null when the database is refused.
+ * stored, and resolves null when the database is refused -- including when
+ * `dir` is not a private directory (see `openDb`).
  */
 export async function updateLedgerDb(dir, decide, { create = true } = {}) {
   const db = openDb(dir, { create });
