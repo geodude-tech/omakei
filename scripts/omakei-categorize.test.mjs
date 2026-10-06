@@ -66,11 +66,12 @@ function attachedFolder() {
   return { home, env, statements, ledgerDir, revisionPath: join(stateDir, "ledger-revision") };
 }
 
-/** Run the CLI; returns { status, stdout, stderr }. */
-function cli(args, home) {
+/** Run the CLI; returns { status, stdout, stderr }. Optional `input` is stdin. */
+function cli(args, home, input) {
   try {
     const stdout = execFileSync("node", ["scripts/omakei-categorize.mjs", ...args], {
       encoding: "utf8",
+      input,
       env: { ...process.env, HOME: home, XDG_STATE_HOME: join(home, ".local", "state") },
     });
     return { status: 0, stdout, stderr: "" };
@@ -268,5 +269,55 @@ test("--pin categorizes one transaction by id, and an unknown id writes nothing"
   const before = await readLedgerDb(ledgerDir);
   const missing = cli(["--pin", "nope", "shopping"], home);
   assert.equal(missing.status, 1);
+  await unchanged(ledgerDir, before);
+});
+
+test("--stdin adds a rule from JSON without putting the merchant on argv", async () => {
+  const { home, ledgerDir, revisionPath } = await attachedLedger(TX);
+  const payload = JSON.stringify({ pattern: "zorp widgets", categoryId: "shopping" });
+  const { status, stdout } = cli(["--stdin"], home, payload);
+  assert.equal(status, 0);
+  assert.match(stdout, /2 transactions re-tagged/);
+  assert.deepEqual(await categories(ledgerDir), {
+    a: "coffee",
+    b: "shopping",
+    c: "shopping",
+    d: "subscriptions",
+  });
+  assert.deepEqual(
+    (await readLedger(ledgerDir)).rules.map((r) => [r.pattern, r.categoryId, r.source]),
+    [["zorp widgets", "shopping", "user"]],
+  );
+  assert.ok(readFileSync(revisionPath, "utf8").trim().length > 0, "revision bumped");
+});
+
+test("--stdin refuses leftover positional arguments", async () => {
+  const { home, ledgerDir } = await attachedLedger(TX);
+  const before = await readLedgerDb(ledgerDir);
+  const payload = JSON.stringify({ pattern: "zorp widgets", categoryId: "shopping" });
+  const { status, stderr } = cli(["--stdin", "extra"], home, payload);
+  assert.equal(status, 1);
+  assert.match(stderr, /does not take positional/);
+  await unchanged(ledgerDir, before);
+});
+
+test("--stdin with an unknown category fails and writes nothing", async () => {
+  const { home, ledgerDir } = await attachedLedger(TX);
+  const before = await readLedgerDb(ledgerDir);
+  const payload = JSON.stringify({ pattern: "zorp widgets", categoryId: "nonsense" });
+  const { status, stderr } = cli(["--stdin"], home, payload);
+  assert.equal(status, 1);
+  assert.match(stderr, /Unknown category/);
+  await unchanged(ledgerDir, before);
+});
+
+test("--stdin with --remove is refused rather than reinterpreted", async () => {
+  const { home, ledgerDir } = await attachedLedger(TX);
+  cli(["zorp widgets", "shopping"], home);
+  const before = await readLedgerDb(ledgerDir);
+  const payload = JSON.stringify({ pattern: "zorp widgets", categoryId: "shopping" });
+  const { status, stderr } = cli(["--stdin", "--remove"], home, payload);
+  assert.equal(status, 1);
+  assert.match(stderr, /only for adding or updating/);
   await unchanged(ledgerDir, before);
 });

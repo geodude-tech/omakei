@@ -12,10 +12,12 @@ import "Model.js" as Model
  * This is the one thing in the widget only the person can answer -- what is
  * `SQ *PORCH SUPPLY`? -- and the only thing the widget writes. It writes it the
  * way every Omarchy panel does: by running a CLI that already works from a
- * terminal. `omakei-categorize.mjs <merchant> <category>` writes the rule
- * (for `CHECK`, it pins the outstanding checks instead, so the next one asks
- * again), re-derives every transaction with the shipped engine, and bumps the revision
- * file, so the row leaves on the read that follows.
+ * terminal. `omakei-categorize.mjs --stdin` with `{"pattern","categoryId"}` on
+ * stdin writes the rule (for `CHECK`, it pins the outstanding checks instead,
+ * so the next one asks again), re-derives every transaction with the shipped
+ * engine, and bumps the revision file, so the row leaves on the read that
+ * follows. Merchant and category stay off argv so other local users cannot
+ * read them from `/proc/.../cmdline`.
  *
  * It lives in its own file because the queue, the failure state, and the
  * dropdown bookkeeping are a self-contained machine that has nothing to do with
@@ -64,6 +66,8 @@ Column {
    */
   property var pendingWrites: []
   property string writingMerchant: ""
+  /** JSON payload for the write in flight; kept out of the Process argv. */
+  property string writingStdin: ""
 
   /**
    * Merchants whose rule the CLI refused to write -- no ledger, or three lost
@@ -106,15 +110,17 @@ Column {
 
   function categorize(merchant, categoryId) {
     var command = Model.categorizeCommand(root.pluginDir, merchant, categoryId)
+    var stdin = Model.categorizeStdin(merchant, categoryId)
     // An empty command means a merchant, a category, or a plugin directory we
     // do not have. Do nothing rather than run something half-formed.
-    if (command.length === 0) return
+    if (command.length === 0 || !stdin) return
     // A second pick for the same merchant is queued, not dropped. The rule is
     // keyed by pattern, so the last write wins -- which is the category the
     // dropdown is showing. Dropping it would leave the popup claiming one
-    // category and the ledger holding another.
+    // category and the ledger holding another. Merchant and category ride in
+    // this queue (and then on stdin), never in the Process argv.
     var queue = root.pendingWrites.slice()
-    queue.push({ merchant: merchant, command: command })
+    queue.push({ merchant: merchant, command: command, stdin: stdin })
     root.pendingWrites = queue
     root.setFailed(merchant, false)
     root.startNextWrite()
@@ -126,6 +132,11 @@ Column {
     var next = queue.shift()
     root.pendingWrites = queue
     root.writingMerchant = next.merchant
+    root.writingStdin = next.stdin
+    // Re-open stdin for this launch: closing it after the previous write is
+    // how the CLI sees EOF, and Quickshell will not reopen a closed channel
+    // on the same Process until the next start with stdinEnabled true.
+    categorizer.stdinEnabled = true
     categorizer.command = next.command
     categorizer.running = true
   }
@@ -133,12 +144,20 @@ Column {
   Process {
     id: categorizer
     running: false
+    stdinEnabled: true
+    onStarted: {
+      categorizer.write(root.writingStdin)
+      // Close stdin so the CLI's stdin read ends; leaving it open would hang
+      // omakei-categorize.mjs waiting for more input.
+      categorizer.stdinEnabled = false
+    }
     onExited: function(exitCode, exitStatus) {
       // The CLI says what went wrong on stderr, which nobody is reading here.
       // The row carries the fact that it failed; the reason is one `--list`
       // away in a terminal.
       root.setFailed(root.writingMerchant, exitCode !== 0)
       root.writingMerchant = ""
+      root.writingStdin = ""
       root.wrote()
       root.startNextWrite()
     }

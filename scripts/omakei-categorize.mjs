@@ -4,6 +4,7 @@
  * terminal — the bulk-editing path the editor deliberately does not have.
  *
  *   omakei-categorize.mjs <pattern> <category-id>      add or update a user rule
+ *   omakei-categorize.mjs --stdin                      same add/update, pattern+categoryId from JSON on stdin
  *   omakei-categorize.mjs --remove <pattern>           drop a user rule
  *   omakei-categorize.mjs --list                       merchants with no category yet
  *   omakei-categorize.mjs --list --json                the same list, as JSON
@@ -98,23 +99,60 @@ function takeFlag(args, flag) {
   return true;
 }
 
-export async function run(argv, { env = process.env, home = homedir() } = {}) {
+async function readStdinText() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** Parse the one JSON object `--stdin` accepts: pattern + categoryId only. */
+function parseStdinPayload(raw) {
+  let body;
+  try {
+    body = JSON.parse(String(raw ?? ""));
+  } catch {
+    return { error: '--stdin expects one JSON object: {"pattern":"…","categoryId":"…"}' };
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { error: '--stdin expects one JSON object: {"pattern":"…","categoryId":"…"}' };
+  }
+  if (typeof body.pattern !== "string" || typeof body.categoryId !== "string") {
+    return { error: '--stdin requires string "pattern" and "categoryId".' };
+  }
+  return { pattern: body.pattern, categoryId: body.categoryId };
+}
+
+export async function run(argv, { env = process.env, home = homedir(), stdinText } = {}) {
   const args = [...argv];
   const list = takeFlag(args, "--list");
   const json = takeFlag(args, "--json");
   const dryRun = takeFlag(args, "--dry-run");
   const remove = takeFlag(args, "--remove");
   const pin = takeFlag(args, "--pin");
-  const [pattern, categoryId] = args;
+  const fromStdin = takeFlag(args, "--stdin");
+  let pattern;
+  let categoryId;
 
   // Everything that can be wrong with the command is refused before the
   // ledger is opened, so a mistyped command never touches it.
+  if (fromStdin) {
+    if (list || json || remove || pin || dryRun) {
+      return fail("--stdin is only for adding or updating a rule.");
+    }
+    if (args.length > 0) return fail("--stdin does not take positional arguments.");
+    const parsed = parseStdinPayload(stdinText !== undefined ? stdinText : await readStdinText());
+    if (parsed.error) return fail(parsed.error);
+    pattern = parsed.pattern;
+    categoryId = parsed.categoryId;
+  } else {
+    [pattern, categoryId] = args;
+  }
   if (json && !list) return fail("--json only applies to --list.");
   if (!list && remove && !pattern) return fail("Usage: omakei-categorize.mjs --remove <pattern>");
   if (!list && !remove) {
     if (!pattern || !categoryId) {
       return fail(
-        "Usage: omakei-categorize.mjs <pattern> <category-id>  (also --list [--json], --remove, --pin, --dry-run)",
+        "Usage: omakei-categorize.mjs <pattern> <category-id>  (also --stdin, --list [--json], --remove, --pin, --dry-run)",
       );
     }
     if (!CATEGORY_IDS.includes(categoryId)) {
