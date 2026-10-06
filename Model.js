@@ -298,9 +298,11 @@ function categoryOptions(placeholder) {
  * category, through the CLI that already does it from a terminal. Returned as
  * an argv array, so nothing here has to be quoted and no shell is involved.
  *
- * Anything missing or unknown returns [] rather than a command with a hole in
- * it. The CLI validates the category too -- this is the near check, not the
- * only one.
+ * Merchant and category travel on stdin (`--stdin`), not argv -- another local
+ * user can read `/proc/.../cmdline`, and those values are personal transaction
+ * context. Anything missing or unknown returns [] rather than a command with a
+ * hole in it. The CLI validates the category too -- this is the near check,
+ * not the only one.
  */
 function categorizeCommand(pluginDir, merchant, categoryId) {
   var dir = String(pluginDir || "").replace(/\/$/, "")
@@ -308,7 +310,20 @@ function categorizeCommand(pluginDir, merchant, categoryId) {
   var id = String(categoryId || "")
   if (!dir || !name) return []
   if (!Object.prototype.hasOwnProperty.call(CATEGORY_NAMES, id)) return []
-  return [dir + "/scripts/omakei-categorize.mjs", name, id]
+  return [dir + "/scripts/omakei-categorize.mjs", "--stdin"]
+}
+
+/**
+ * The JSON line `omakei-categorize.mjs --stdin` reads. Built here so the widget
+ * never has to invent the shape, and so a bad merchant or category yields ""
+ * the same way `categorizeCommand` yields [].
+ */
+function categorizeStdin(merchant, categoryId) {
+  var name = String(merchant || "").replace(/^\s+|\s+$/g, "")
+  var id = String(categoryId || "")
+  if (!name) return ""
+  if (!Object.prototype.hasOwnProperty.call(CATEGORY_NAMES, id)) return ""
+  return JSON.stringify({ pattern: name, categoryId: id })
 }
 
 function emptySummary(month) {

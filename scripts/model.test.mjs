@@ -11,7 +11,7 @@ import { CATEGORIES } from "../src/lib/finance/categories.ts";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = readFileSync(join(ROOT, "Model.js"), "utf8");
 const Model = new Function(
-  `${src}\nreturn { editorUrl, editorQuery, emptySummary, summarize, parseSetAsides, openEditorCommand, shellQuote, revisionFilePath, parseLedger, parseReaderOutput, latestMonth, openingMonth, dailySpend, daysInMonth, categoryOptions, categorizeCommand, rollingSummary, trailingStart, barTooltip, currentDay };`,
+  `${src}\nreturn { editorUrl, editorQuery, emptySummary, summarize, parseSetAsides, openEditorCommand, shellQuote, revisionFilePath, parseLedger, parseReaderOutput, latestMonth, openingMonth, dailySpend, daysInMonth, categoryOptions, categorizeCommand, categorizeStdin, rollingSummary, trailingStart, barTooltip, currentDay };`,
 )();
 
 test("editorUrl carries the month the popup was showing", () => {
@@ -229,12 +229,15 @@ test("categoryOptions offers the app's categories, placeholder first", () => {
   assert.equal(Model.categoryOptions()[0].value, "housing", "no placeholder unless one is asked for");
 });
 
-test("categorizeCommand runs the CLI, and nothing half-formed", () => {
+test("categorizeCommand runs the CLI via --stdin, and nothing half-formed", () => {
   assert.deepEqual(Model.categorizeCommand("/p/omakei/", "ZORP WIDGETS", "shopping"), [
     "/p/omakei/scripts/omakei-categorize.mjs",
-    "ZORP WIDGETS",
-    "shopping",
+    "--stdin",
   ]);
+  assert.equal(
+    Model.categorizeStdin("ZORP WIDGETS", "shopping"),
+    JSON.stringify({ pattern: "ZORP WIDGETS", categoryId: "shopping" }),
+  );
   assert.deepEqual(Model.categorizeCommand("", "ZORP WIDGETS", "shopping"), [], "no plugin dir");
   assert.deepEqual(Model.categorizeCommand("/p", "   ", "shopping"), [], "no merchant");
   assert.deepEqual(Model.categorizeCommand("/p", "ZORP", ""), [], "no category");
@@ -243,6 +246,16 @@ test("categorizeCommand runs the CLI, and nothing half-formed", () => {
     Model.categorizeCommand("/p", "ZORP", "constructor"),
     [],
     "an inherited property is not a category",
+  );
+  assert.equal(Model.categorizeStdin("   ", "shopping"), "", "no merchant");
+  assert.equal(Model.categorizeStdin("ZORP", "nonsense"), "", "not a category");
+  assert.ok(
+    !Model.categorizeCommand("/p", "ZORP WIDGETS", "shopping").includes("ZORP WIDGETS"),
+    "merchant must not appear in argv",
+  );
+  assert.ok(
+    !Model.categorizeCommand("/p", "ZORP WIDGETS", "shopping").includes("shopping"),
+    "category must not appear in argv",
   );
 });
 
