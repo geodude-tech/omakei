@@ -54,9 +54,17 @@ if [ ! -f "$ROOT/dist/index.html" ]; then
   exit 1
 fi
 
-mkdir -p "$STATE"
-OMAKEI_HOST="$host" OMAKEI_PORT="$port" \
-  setsid nohup node "$ROOT/scripts/omakei-serve.mjs" >>"$LOG" 2>&1 </dev/null &
+# The log takes the server's error output, which can quote a request that
+# carried the ledger, so it and everything the server creates are readable by
+# this user only. An older log made under the default umask is tightened too.
+# The umask stays in this subshell, so the browser opened below is unaffected.
+(
+  umask 077
+  mkdir -p "$STATE"
+  touch "$LOG" && chmod 600 "$LOG"
+  OMAKEI_HOST="$host" OMAKEI_PORT="$port" \
+    setsid nohup node "$ROOT/scripts/omakei-serve.mjs" >>"$LOG" 2>&1 </dev/null &
+)
 
 for _ in $(seq 1 40); do
   if serving; then
