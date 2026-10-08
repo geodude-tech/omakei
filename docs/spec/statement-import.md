@@ -125,8 +125,10 @@ Converting happens outside the plugin instead.
 a CSV this parser already reads, using `pdftotext` from poppler. It is one bank's
 layout by design rather than a general PDF importer, and it reconciles its parsed
 rows against the totals the statement prints before writing anything, so an
-unrecognized layout exits non-zero instead of emitting a half-right CSV. A second
-bank is a second script beside it, not a generalization of this one.
+unrecognized layout exits non-zero instead of emitting a half-right CSV. The CSV
+is created mode 0600 whatever the umask, and an existing file or symlink at the
+output path is refused rather than overwritten or followed. A second bank is a
+second script beside it, not a generalization of this one.
 
 ### Column detection (delimited)
 

@@ -9,8 +9,26 @@
  * under the wrong year. Both produce a plausible-looking ledger.
  */
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { parseBoaStatement, toCsv, UnrecognizedStatement } from "./omakei-convert-boa-pdf.mjs";
+
+const SCRIPT = fileURLToPath(new URL("./omakei-convert-boa-pdf.mjs", import.meta.url));
 
 /** A statement whose totals are computed from its rows, so it always reconciles. */
 function statement({ closing = "08/10/2026", rows = [], interest = "0.00", previous = 0 } = {}) {
@@ -139,4 +157,78 @@ test("a payee containing a comma is quoted once, not twice", () => {
     { postedDate: "07/31/2026", reference: "1234", payee: "BOOKS, MAPS & MORE", amount: -1234 },
   ]);
   assert.equal(csv.split("\n")[1], '07/31/2026,1234,"BOOKS, MAPS & MORE",,-12.34');
+});
+
+/**
+ * Run the CLI against a stand-in `pdftotext` that prints a synthetic statement,
+ * under the default umask, so the file it writes is the one a user would get.
+ */
+function convert(args) {
+  const dir = mkdtempSync(join(tmpdir(), "omakei-convert-"));
+  const bin = join(dir, "bin");
+  const text = join(dir, "statement.txt");
+  writeFileSync(
+    text,
+    statement({ rows: [{ trans: "07/20", posted: "07/21", payee: "GROCERY MART", amount: 1 }] }),
+  );
+  mkdirSync(bin);
+  writeFileSync(join(bin, "pdftotext"), `#!/bin/sh\ncat '${text}'\n`, { mode: 0o755 });
+  const pdf = join(dir, "statement.pdf");
+  writeFileSync(pdf, "");
+  chmodSync(pdf, 0o600);
+
+  const previous = process.umask(0o022);
+  try {
+    const result = spawnSync(process.execPath, [SCRIPT, pdf, ...args(dir)], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+    return { dir, result };
+  } finally {
+    process.umask(previous);
+  }
+}
+
+test("the CSV is readable by its owner only, whatever the umask", () => {
+  const { dir, result } = convert(() => []);
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    const out = join(dir, "statement.csv");
+    assert.equal(statSync(out).mode & 0o777, 0o600);
+    assert.match(readFileSync(out, "utf8"), /GROCERY MART/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a symlink planted at the output path is not followed", () => {
+  let target;
+  const { dir, result } = convert((d) => {
+    target = join(d, "elsewhere.txt");
+    writeFileSync(target, "untouched\n");
+    symlinkSync(target, join(d, "statement.csv"));
+    return [];
+  });
+  try {
+    assert.notEqual(result.status, 0);
+    assert.equal(readFileSync(target, "utf8"), "untouched\n");
+    assert.ok(lstatSync(join(dir, "statement.csv")).isSymbolicLink());
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an existing file at the output path is refused and left as it was", () => {
+  const { dir, result } = convert((d) => {
+    writeFileSync(join(d, "mine.csv"), "keep me\n");
+    return ["--out", join(d, "mine.csv")];
+  });
+  try {
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /already exists/);
+    assert.equal(readFileSync(join(dir, "mine.csv"), "utf8"), "keep me\n");
+    assert.ok(!existsSync(join(dir, "statement.csv")));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

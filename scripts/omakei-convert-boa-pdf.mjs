@@ -48,7 +48,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { basename, dirname, join } from "node:path";
-import { writeFileSync } from "node:fs";
+import { closeSync, constants as FS, fchmodSync, openSync, writeFileSync } from "node:fs";
 
 /** Statement text we refuse to read at all, rather than guess about. */
 export class UnrecognizedStatement extends Error {}
@@ -230,6 +230,22 @@ function extractText(pdfPath) {
   }
 }
 
+/**
+ * Write the CSV readable by its owner only. It holds every transaction on the
+ * statement, so it gets the PDF's privacy rather than whatever the umask
+ * allows. `O_EXCL` with `O_NOFOLLOW` means an existing file, or a symlink
+ * planted at that name, fails the open instead of being written through.
+ */
+function writePrivate(path, text) {
+  const fd = openSync(path, FS.O_WRONLY | FS.O_CREAT | FS.O_EXCL | FS.O_NOFOLLOW, 0o600);
+  try {
+    fchmodSync(fd, 0o600);
+    writeFileSync(fd, text);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function main(argv) {
   const args = argv.slice(2);
   const toStdout = args.includes("--stdout");
@@ -266,7 +282,13 @@ function main(argv) {
 
   const out =
     explicitOut ?? join(dirname(pdfPath), basename(pdfPath).replace(/\.pdf$/i, "") + ".csv");
-  writeFileSync(out, csv);
+  try {
+    writePrivate(out, csv);
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    process.stderr.write(`${out} already exists. Nothing was written; remove it or pass --out.\n`);
+    return 1;
+  }
   process.stderr.write(
     `${parsed.transactions.length} transactions -> ${out}\n` +
       `Reconciled against the statement closing ${parsed.closingDate} ` +
