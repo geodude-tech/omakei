@@ -50,14 +50,24 @@ LEDGER=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")
   `$LEDGER` is `omakei-ledger.sqlite`.
 
 - Back the ledger up somewhere **outside** the statements folder and outside
-  this repository. `.backup` is safe while the server is running, unlike `cp`:
+  this repository. `.backup` is safe while the server is running, unlike `cp`.
+  The backup is the whole ledger, so `umask 077` creates it readable by the
+  user only:
 
 ```sh
-sqlite3 -readonly "$LEDGER" ".backup '$HOME/.local/state/omakei/omakei-ledger.backup-$(date +%F).sqlite'"
+(umask 077 && sqlite3 -readonly "$LEDGER" ".backup '$HOME/.local/state/omakei/omakei-ledger.backup-$(date +%F).sqlite'")
 ```
 
 - The editor may stay open. If you plan to restore a backup later, close it
   first.
+- Make a private scratch directory for anything this session saves from the
+  ledger. `mktemp -d` creates it mode 0700, so other users on the machine
+  cannot read what goes in it. Step 7 removes it.
+
+```sh
+WORK=$(mktemp -d)
+```
+
 - Record the spend total for every month, before anything changes (step 7
   compares against it). Spend follows rule 1 of `docs/ledger.md`:
 
@@ -67,7 +77,7 @@ spend_by_month() {
   sqlite3 -readonly -separator ' ' "$LEDGER" \
     "SELECT substr(date, 1, 7), printf('%.2f', -sum(amount)) FROM spend GROUP BY 1 ORDER BY 1"
 }
-spend_by_month > /tmp/omakei-spend-before.txt
+spend_by_month > "$WORK/spend-before.txt"
 ```
 
 ### 1. Survey
@@ -179,13 +189,18 @@ intended.
   the step 0 snippet again and compare:
 
 ```sh
-diff /tmp/omakei-spend-before.txt <(spend_by_month) && echo "spend unchanged"
+diff "$WORK/spend-before.txt" <(spend_by_month) && echo "spend unchanged"
 ```
 
   A month whose spend changed when you made no `transfers` decision means a rule
   overrode a detected transfer. Remove it (`--remove`) and look again.
 - For the latest month, compare each category against the months before it. A
   category that jumped this session is where an over-broad rule landed.
+- When the checks pass, remove the scratch directory:
+
+```sh
+rm -rf "$WORK"
+```
 
 ### 8. Report back
 
@@ -222,6 +237,9 @@ change — a transfer that seemed mispaired, a duplicate-looking row.
   catches shapes (card numbers, addresses) and the terms listed in the
   gitignored `.githooks/personal-terms`; it cannot recognise a merchant as
   someone's, so the rule is yours to keep.
+- **Save ledger output where other users can read it**, such as a file of your
+  own naming in `/tmp`. Anything you write from the ledger goes in `$WORK` from
+  step 0.
 - **Commit a ledger, a statement, or a backup.** `check-no-statements.mjs`
   blocks the known filenames, not a renamed copy.
 - **Write a rule for a check or a bare payment rail**, or invent a category id.

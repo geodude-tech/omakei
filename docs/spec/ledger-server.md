@@ -245,6 +245,9 @@ theme loader that share this module.
   `omakei-serve.mjs` refuses to start on a non-loopback `OMAKEI_HOST`, and
   `scripts/omakei-open` pins the widget's URL setting to loopback so the setting
   can choose the port but never the interface.
+- Start the server from `scripts/omakei-open` under `umask 077`, with
+  `server.log` mode 0600. The log takes the server's error output, which can
+  quote a request that carried the ledger.
 - Keep the loopback socket, `Host`, and `Origin` guards, and keep them in front
   of the static routes too. This is a personal ledger; nothing else on the
   network or in the browser may reach it.
