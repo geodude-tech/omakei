@@ -48,6 +48,46 @@ Use whatever your bank already gives you.
 
 Subfolders are fine, and a folder named `Credit`, `Mortgage`, `Checking`, or `Savings` tells Omakei what kind of account its files came from. Drop in new months whenever you have them; Omakei picks them up the next time you open it.
 
+### Importing on its own (optional)
+
+Out of the box, new files are picked up when you open Omakei. To have them
+imported while it is closed — PDFs included — with a small notice like
+"12 new transactions, 2 need a category", run the importer on a timer. It is
+off until you turn it on:
+
+```sh
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/omakei-import.service <<'EOF'
+[Unit]
+Description=Import new statements into Omakei
+
+[Service]
+Type=oneshot
+UMask=0077
+NoNewPrivileges=yes
+ExecStart=/usr/bin/node %h/.config/omarchy/plugins/omakei/scripts/omakei-import.mjs --notify
+EOF
+cat > ~/.config/systemd/user/omakei-import.timer <<'EOF'
+[Unit]
+Description=Check for new Omakei statements every 15 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target
+EOF
+systemctl --user daemon-reload
+systemctl --user enable --now omakei-import.timer
+```
+
+Or run it by hand any time: `node ~/.config/omarchy/plugins/omakei/scripts/omakei-import.mjs`.
+`--status` lists the files it has read. It only reads the attached folder,
+leaves a file alone until it has stopped changing for two minutes, never
+imports the same file or transaction twice, and writes nothing but the private
+ledger. To turn it off: `systemctl --user disable --now omakei-import.timer`.
+
 ### Categories
 
 Known merchants are categorized automatically. A transaction with an unknown category only needs to be categorized **once** — Omakei remembers the merchant and applies it on the next import.

@@ -21,6 +21,12 @@ import { dirname, join } from "node:path";
 import { DB_FILENAME, MAX_LEDGER_BYTES, isLedgerPayload } from "./ledger-api.mjs";
 import { CATEGORIES, TRANSFER_CATEGORY } from "../src/lib/finance/categories.ts";
 import { MARK_KINDS, MAX_MARKS, MAX_MARK_KEY, MAX_MARK_REF } from "../src/lib/finance/subscriptions.ts";
+import {
+  IMPORT_STATUSES,
+  MAX_IMPORT_PATH,
+  MAX_IMPORT_REASON,
+  MAX_IMPORT_RECORDS,
+} from "../src/lib/finance/auto-import.ts";
 
 export { DB_FILENAME };
 export const SCHEMA_VERSION = 2;
@@ -44,6 +50,7 @@ const TX_COLUMNS = [
 const RULE_COLUMNS = ["id", "pattern", "categoryId", "createdAt", "source"];
 const SET_ASIDE_COLUMNS = ["id", "name", "amount"];
 const MARK_COLUMNS = ["key", "kind", "ref", "createdAt"];
+const IMPORT_COLUMNS = ["path", "sha256", "size", "status", "added", "reason", "importedAt"];
 
 /**
  * Keys a row may leave out entirely. Absent on almost every transaction, so a
@@ -60,6 +67,7 @@ const SNAPSHOT_KEYS = new Set([
   "rules",
   "setAsides",
   "subscriptionMarks",
+  "importedFiles",
 ]);
 
 /**
@@ -77,6 +85,24 @@ CREATE TABLE IF NOT EXISTS subscriptionMarks (
   kind      TEXT NOT NULL,
   ref       TEXT NOT NULL,
   createdAt INTEGER
+);
+`;
+
+/**
+ * The statement files `scripts/omakei-import.mjs` has read, so the next run
+ * skips them (docs/spec/auto-import.md). Added the same way as
+ * `subscriptionMarks`, for the same reasons.
+ */
+const IMPORTS_TABLE = `
+CREATE TABLE IF NOT EXISTS importedFiles (
+  seq        INTEGER PRIMARY KEY,
+  path       TEXT NOT NULL,
+  sha256     TEXT NOT NULL,
+  size       INTEGER,
+  status     TEXT NOT NULL,
+  added      INTEGER,
+  reason     TEXT NOT NULL,
+  importedAt INTEGER
 );
 `;
 
@@ -129,7 +155,7 @@ CREATE TABLE IF NOT EXISTS setAsides (
   name   TEXT,
   amount REAL
 );
-${MARKS_TABLE}`;
+${MARKS_TABLE}${IMPORTS_TABLE}`;
 
 /**
  * What makes a query over the ledger right, kept in the file instead of only in
@@ -394,6 +420,10 @@ function readSnapshot(db) {
     const marks = rowsOf(db, "subscriptionMarks", MARK_COLUMNS);
     if (marks.length > 0) snapshot.subscriptionMarks = marks;
   }
+  if (hasTable(db, "importedFiles")) {
+    const imports = rowsOf(db, "importedFiles", IMPORT_COLUMNS);
+    if (imports.length > 0) snapshot.importedFiles = imports;
+  }
   return snapshot;
 }
 
@@ -401,6 +431,30 @@ function readSnapshot(db) {
  * Marks come from the browser, so they are held to their shape here rather
  * than trusted: a known kind, short strings, and a bounded count.
  */
+/** Import records come from a script, but are held to their shape all the same. */
+function checkImports(records) {
+  if (!Array.isArray(records)) throw new LedgerShapeError("importedFiles is not a list");
+  if (records.length > MAX_IMPORT_RECORDS) throw new LedgerShapeError("Too many import records");
+  for (const r of records) {
+    if (!isRecord(r)) throw new LedgerShapeError("An import record is not an object");
+    if (typeof r.path !== "string" || r.path.length === 0 || r.path.length > MAX_IMPORT_PATH) {
+      throw new LedgerShapeError("An import record has a bad path");
+    }
+    if (typeof r.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(r.sha256)) {
+      throw new LedgerShapeError("An import record has a bad sha256");
+    }
+    if (!IMPORT_STATUSES.includes(r.status)) throw new LedgerShapeError("An import record has an unknown status");
+    if (typeof r.reason !== "string" || r.reason.length > MAX_IMPORT_REASON) {
+      throw new LedgerShapeError("An import record has a bad reason");
+    }
+    for (const n of ["size", "added", "importedAt"]) {
+      if (r[n] !== undefined && r[n] !== null && !Number.isFinite(r[n])) {
+        throw new LedgerShapeError(`An import record has a bad ${n}`);
+      }
+    }
+  }
+}
+
 function checkMarks(marks) {
   if (!Array.isArray(marks)) throw new LedgerShapeError("subscriptionMarks is not a list");
   if (marks.length > MAX_MARKS) throw new LedgerShapeError("Too many subscription marks");
@@ -487,6 +541,11 @@ function replaceSnapshot(db, ledger) {
     db.exec("DELETE FROM subscriptionMarks");
     insertAll(db, "subscriptionMarks", MARK_COLUMNS, ledger.subscriptionMarks, "subscription mark");
   }
+  if (ledger.importedFiles !== undefined) {
+    checkImports(ledger.importedFiles);
+    db.exec("DELETE FROM importedFiles");
+    insertAll(db, "importedFiles", IMPORT_COLUMNS, ledger.importedFiles, "import record");
+  }
   setMeta(db, "savedAt", typeof ledger.savedAt === "string" ? ledger.savedAt : new Date().toISOString());
   setMeta(db, "selectedMonth", typeof ledger.selectedMonth === "string" ? ledger.selectedMonth : "");
   refreshDerived(db);
@@ -544,6 +603,7 @@ export async function updateLedgerDb(dir, decide, { create = true } = {}) {
     db.exec("BEGIN IMMEDIATE");
     try {
       db.exec(MARKS_TABLE);
+      db.exec(IMPORTS_TABLE);
       const etag = etagOf(db);
       let current;
       const view = {
