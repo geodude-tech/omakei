@@ -87,6 +87,17 @@ function syntheticLedger() {
     ],
     rules: [],
     setAsides: [{ id: "s1", name: "Taxes", amount: 500 }],
+    importedFiles: [
+      {
+        path: "checking-2026-09.csv",
+        sha256: "a".repeat(64),
+        size: 100,
+        status: "imported",
+        added: 6,
+        reason: "",
+        importedAt: Date.UTC(2026, 8, 29, 8),
+      },
+    ],
   };
 }
 
@@ -132,6 +143,7 @@ test("info finds the ledger through state.json, under ledgers/<id>/", async () =
   ]);
   assert.equal(body.data.uncategorizedCount, 2);
   assert.equal(body.data.savedAt, "2026-09-30T12:00:00.000Z");
+  assert.equal(body.data.lastImportAt, "2026-09-29T08:00:00.000Z");
 });
 
 test("summary matches the dashboard: transfers left out, uncategorized counted, set-asides off net", async () => {
@@ -242,7 +254,10 @@ test("bad input is a JSON usage error with exit 2", async () => {
     ["tx", "--category", "dining", "--uncategorized"],
     ["tx", "--limit", "0"],
     ["tx", "--search"],
-    ["info", "--month", "2026-01", "--month", "2026-02"],
+    ["summary", "--month", "2026-01", "--month", "2026-02"],
+    ["tx", "--category", "constructor"],
+    ["tx", "--uncategorized=yes"],
+    ["tx", "--ledger="],
   ]) {
     const { code, body } = await call(argv, { home, env });
     assert.equal(code, 2, argv.join(" "));

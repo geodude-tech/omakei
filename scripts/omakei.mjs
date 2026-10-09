@@ -1,29 +1,9 @@
 #!/usr/bin/env node
 /**
- * One entry point for asking the ledger questions from outside the app -- an
- * agent, a script, a terminal. Every subcommand prints exactly one JSON object
- * on stdout:
- *
- *   {"ok": true,  "version": "1.0.0", "schemaVersion": 2, "command": "info", "data": {...}}
- *   {"ok": false, "version": "1.0.0", "schemaVersion": 2, "command": "tx",   "error": {"code", "message"}}
- *
- * and exits 0 on success, 1 when there is no ledger to read, 2 for a usage
- * error. Nothing goes to stderr on purpose, so a caller only ever parses stdout.
- *
- *   omakei.mjs info
- *   omakei.mjs summary [--month YYYY-MM] [--top N]
- *   omakei.mjs tx [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--account NAME]
- *                 [--category ID] [--uncategorized] [--search TEXT] [--limit N]
- *
- * Every subcommand also takes `--ledger <path>`: `omakei-ledger.sqlite` or the
- * folder holding it. Absent, the ledger is found the way the bar widget finds
- * it -- `state.json`, then the attached folder's private directory under
- * `~/.local/state/omakei/ledgers/<id>/` (`readLedgerForWidget`).
- *
- * Read-only: the database is opened read-only, nothing is written anywhere,
- * and there is no network. The numbers come from the same code the editor
- * runs (`summaries.ts`, `isSpend` / `isIncome`), so they follow the rules in
- * docs/ledger.md -- transfers are not spend, uncategorized rows count.
+ * Every run prints exactly one JSON object on stdout and nothing on stderr, so
+ * a caller only ever parses stdout. Exit codes: 0 ok, 1 no ledger, 2 usage.
+ * The numbers come from the code the dashboard runs, so they follow
+ * docs/ledger.md. See the README section "Asking from a script".
  */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -35,9 +15,8 @@ import { parseSetAsides, roundMoney } from "../src/lib/finance/set-asides.ts";
 import { categoryTotals, monthSummary } from "../src/lib/finance/summaries.ts";
 import { monthKey, todayIso } from "../src/lib/dates.ts";
 
-/** Rows `tx` returns when no `--limit` is given, and the most it will return. */
-export const DEFAULT_LIMIT = 500;
-export const MAX_LIMIT = 5000;
+const DEFAULT_LIMIT = 500;
+const MAX_LIMIT = 5000;
 const DEFAULT_TOP = 5;
 
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -61,14 +40,7 @@ class CliError extends Error {
 }
 const usage = (message) => new CliError("usage", message, 2);
 
-/* ---------------------------------------------------------------- argv */
-
-/**
- * `--name value` and `--name=value`. `flags` lists the switches that take no
- * value. Anything unknown, repeated, or missing its value is a usage error
- * rather than something guessed at.
- */
-export function parseArgs(argv, { values = [], flags = [] } = {}) {
+function parseArgs(argv, { values = [], flags = [] } = {}) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -81,7 +53,7 @@ export function parseArgs(argv, { values = [], flags = [] } = {}) {
       out[name] = true;
     } else if (values.includes(name)) {
       const value = eq !== -1 ? arg.slice(eq + 1) : argv[++i];
-      if (value === undefined || (eq === -1 && value.startsWith("--"))) {
+      if (!value || (eq === -1 && value.startsWith("--"))) {
         throw usage(`--${name} needs a value`);
       }
       out[name] = value;
@@ -101,13 +73,11 @@ function positiveInt(name, raw, max) {
 
 function categoryId(raw) {
   const id = String(raw).trim().toLowerCase();
-  if (!CATEGORY_BY_ID[id]) {
+  if (!Object.hasOwn(CATEGORY_BY_ID, id)) {
     throw usage(`Unknown category: ${raw}. Use one of: ${Object.keys(CATEGORY_BY_ID).join(", ")}`);
   }
   return id;
 }
-
-/* -------------------------------------------------------------- ledger */
 
 async function loadLedger(override, { env, home }) {
   const { path, ledger } = await readLedgerForWidget(override ?? "", { env, home });
@@ -133,9 +103,7 @@ function dateRange(rows) {
   return { first, last };
 }
 
-/* ------------------------------------------------------------ commands */
-
-export function infoData({ path, ledger }) {
+function infoData({ path, ledger }) {
   const rows = ledger.transactions;
   const accounts = new Map();
   for (const tx of rows) {
@@ -170,7 +138,7 @@ export function infoData({ path, ledger }) {
   };
 }
 
-export function summaryData({ ledger }, { month, top = DEFAULT_TOP }) {
+function summaryData({ ledger }, { month, top = DEFAULT_TOP }) {
   const rows = ledger.transactions.filter((tx) => monthKey(tx.date) === month);
   const setAsides = parseSetAsides(ledger.setAsides);
   const stats = monthSummary(rows, setAsides);
@@ -199,7 +167,7 @@ export function summaryData({ ledger }, { month, top = DEFAULT_TOP }) {
   };
 }
 
-export function txData({ ledger }, filters) {
+function txData({ ledger }, filters) {
   const { from, to, account, category, uncategorized, search, limit = DEFAULT_LIMIT } = filters;
   const accountNeedle = account?.toLowerCase();
   const searchNeedle = search?.toLowerCase();
@@ -287,11 +255,10 @@ const COMMANDS = {
   },
 };
 
-export const USAGE =
+const USAGE =
   "omakei.mjs <info|summary|tx> [options]  (summary: --month YYYY-MM --top N; " +
   "tx: --from --to --account --category --uncategorized --search --limit; all: --ledger PATH)";
 
-/** Runs one subcommand, writes its JSON to `out`, and resolves the exit code. */
 export async function run(
   argv,
   { env = process.env, home = homedir(), out = process.stdout, today = todayIso() } = {},
