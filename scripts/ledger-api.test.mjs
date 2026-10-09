@@ -1050,3 +1050,22 @@ test("a ledger left in the attached folder is carried over once and left in plac
     await s.close();
   }
 });
+
+test("subscription marks save through PUT /ledger, and a malformed one is a 400 that writes nothing", async () => {
+  const { home, statements } = tempTree();
+  const s = await attached(home, statements);
+  try {
+    const base = { version: 1, transactions: [], rules: [], selectedMonth: "2026-08" };
+    const marks = [{ key: "netflix", kind: "not-subscription", ref: "", createdAt: 1 }];
+    assert.equal((await putLedger(s, { ...base, subscriptionMarks: marks })).status, 200);
+    const state = await (await s.call("/state")).json();
+    assert.deepEqual(state.ledger.subscriptionMarks, marks);
+
+    const bad = await putLedger(s, { ...base, subscriptionMarks: [{ key: "x", kind: "drop table", ref: "" }] });
+    assert.equal(bad.status, 400);
+    assert.deepEqual((await readLedgerDb(ledgerDir(home, statements))).ledger.subscriptionMarks, marks);
+    assert.equal(statSync(ledgerFile(home, statements)).mode & 0o777, 0o600);
+  } finally {
+    await s.close();
+  }
+});

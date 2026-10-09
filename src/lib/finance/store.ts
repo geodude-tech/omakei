@@ -11,6 +11,7 @@ import {
 } from "./ledger.ts";
 import { scheduleLedgerSave } from "./ledger-file.ts";
 import { makeSetAside, parseSetAsides } from "./set-asides.ts";
+import { parseSubscriptionMarks, type MarkKind, type SubscriptionMark } from "./subscriptions.ts";
 import type {
   CategorizeRule,
   ImportFileResult,
@@ -28,6 +29,7 @@ interface LedgerState {
   transactions: Transaction[];
   rules: CategorizeRule[];
   setAsides: SetAside[];
+  subscriptionMarks: SubscriptionMark[];
   initialized: boolean;
   selectedMonth: string;
   setMonth: (month: string) => void;
@@ -37,6 +39,7 @@ interface LedgerState {
     rules: CategorizeRule[];
     selectedMonth: string;
     setAsides?: SetAside[];
+    subscriptionMarks?: SubscriptionMark[];
   }) => void;
   categorizeMerchant: (merchant: string, categoryId: string) => void;
   categorizeOne: (id: string, categoryId: string, always: boolean) => void;
@@ -45,6 +48,9 @@ interface LedgerState {
   addSetAside: () => string;
   updateSetAside: (id: string, patch: { name?: string; amount?: number }) => void;
   removeSetAside: (id: string) => void;
+  /** "Not a subscription" (ref "") or "dismiss this flag" (the flag's ref). */
+  markSubscription: (key: string, kind: MarkKind, ref: string) => void;
+  unmarkSubscription: (key: string, kind: MarkKind, ref: string) => void;
   clearLedger: () => void;
 }
 
@@ -64,6 +70,7 @@ export const useLedgerStore = create<LedgerState>()((set, get) => ({
   transactions: [],
   rules: seedRules(),
   setAsides: [],
+  subscriptionMarks: [],
   initialized: false,
   selectedMonth: currentMonthKey(),
 
@@ -85,6 +92,9 @@ export const useLedgerStore = create<LedgerState>()((set, get) => ({
       rules,
       ...(snapshot.setAsides !== undefined
         ? { setAsides: parseSetAsides(snapshot.setAsides) }
+        : {}),
+      ...(snapshot.subscriptionMarks !== undefined
+        ? { subscriptionMarks: parseSubscriptionMarks(snapshot.subscriptionMarks) }
         : {}),
       initialized: true,
       selectedMonth: snapshot.selectedMonth || latestMonth(snapshot.transactions),
@@ -143,6 +153,19 @@ export const useLedgerStore = create<LedgerState>()((set, get) => ({
 
   removeSetAside: (id) =>
     set({ setAsides: get().setAsides.filter((item) => item.id !== id) }),
+
+  markSubscription: (key, kind, ref) => {
+    const marks = get().subscriptionMarks;
+    if (marks.some((m) => m.key === key && m.kind === kind && m.ref === ref)) return;
+    set({ subscriptionMarks: [...marks, { key, kind, ref, createdAt: Date.now() }] });
+  },
+
+  unmarkSubscription: (key, kind, ref) =>
+    set({
+      subscriptionMarks: get().subscriptionMarks.filter(
+        (m) => !(m.key === key && m.kind === kind && m.ref === ref),
+      ),
+    }),
 
   clearLedger: () =>
     set({ transactions: [], initialized: true, selectedMonth: currentMonthKey() }),

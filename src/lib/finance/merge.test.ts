@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mergeSnapshots, type LedgerSnapshot } from "./ledger-file.ts";
+import { mergeSnapshots, parseLedgerData, snapshotFromState, type LedgerSnapshot } from "./ledger-file.ts";
 import type { CategorizeRule, Transaction } from "./types.ts";
 
 function tx(over: Partial<Transaction> & { id: string }): Transaction {
@@ -30,6 +30,7 @@ function snapshot(over: Partial<LedgerSnapshot> = {}): LedgerSnapshot {
     transactions: [],
     rules: [],
     setAsides: [],
+    subscriptionMarks: [],
     ...over,
   };
 }
@@ -119,4 +120,21 @@ test("a pin the CLI wrote while this tab was open survives our save", () => {
 
   assert.equal(merged.transactions[0]!.pinnedCategoryId, "childcare");
   assert.equal(merged.transactions[0]!.categoryId, "childcare");
+});
+
+test("subscription marks are the editor's: ours are kept, theirs do not come back", () => {
+  const ours = [{ key: "netflix", kind: "not-subscription" as const, ref: "", createdAt: 2 }];
+  const theirs = snapshot({ subscriptionMarks: [{ key: "hulu", kind: "new", ref: "2026-07-01", createdAt: 1 }] });
+  assert.deepEqual(mergeSnapshots(snapshot({ subscriptionMarks: ours }), theirs).subscriptionMarks, ours);
+});
+
+test("marks survive the trip through the snapshot the editor saves and loads", () => {
+  const marks = [{ key: "netflix", kind: "price-up" as const, ref: "1599", createdAt: 3 }];
+  const saved = snapshotFromState({ transactions: [], rules: [], selectedMonth: "2026-08", subscriptionMarks: marks });
+  assert.deepEqual(saved.subscriptionMarks, marks);
+  assert.deepEqual(parseLedgerData(JSON.parse(JSON.stringify(saved)))?.subscriptionMarks, marks);
+  const older = parseLedgerData({ version: 1, transactions: [], rules: [] });
+  assert.deepEqual(older?.subscriptionMarks, [], "a ledger with no marks parses as none");
+  const junk = parseLedgerData({ version: 1, transactions: [], rules: [], subscriptionMarks: [{ key: "x", kind: "rm -rf", ref: "" }] });
+  assert.deepEqual(junk?.subscriptionMarks, [], "a mark of an unknown kind is dropped");
 });

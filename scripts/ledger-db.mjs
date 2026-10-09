@@ -20,6 +20,7 @@ import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { DB_FILENAME, MAX_LEDGER_BYTES, isLedgerPayload } from "./ledger-api.mjs";
 import { CATEGORIES, TRANSFER_CATEGORY } from "../src/lib/finance/categories.ts";
+import { MARK_KINDS, MAX_MARKS, MAX_MARK_KEY, MAX_MARK_REF } from "../src/lib/finance/subscriptions.ts";
 
 export { DB_FILENAME };
 export const SCHEMA_VERSION = 2;
@@ -42,6 +43,7 @@ const TX_COLUMNS = [
 ];
 const RULE_COLUMNS = ["id", "pattern", "categoryId", "createdAt", "source"];
 const SET_ASIDE_COLUMNS = ["id", "name", "amount"];
+const MARK_COLUMNS = ["key", "kind", "ref", "createdAt"];
 
 /**
  * Keys a row may leave out entirely. Absent on almost every transaction, so a
@@ -50,7 +52,33 @@ const SET_ASIDE_COLUMNS = ["id", "name", "amount"];
  */
 const OPTIONAL_KEYS = new Set(["pinnedCategoryId"]);
 
-const SNAPSHOT_KEYS = new Set(["version", "savedAt", "selectedMonth", "transactions", "rules", "setAsides"]);
+const SNAPSHOT_KEYS = new Set([
+  "version",
+  "savedAt",
+  "selectedMonth",
+  "transactions",
+  "rules",
+  "setAsides",
+  "subscriptionMarks",
+]);
+
+/**
+ * What the user said about a recurring charge: "not a subscription", or "I saw
+ * this flag" (docs/spec/subscriptions.md). Added after cutover, so it is
+ * created with IF NOT EXISTS inside every write rather than by a version bump:
+ * a ledger from before it gains the table on its next save, and an older
+ * Omakei reading or writing the same file neither refuses it nor clears it --
+ * it only replaces the tables it knows.
+ */
+const MARKS_TABLE = `
+CREATE TABLE IF NOT EXISTS subscriptionMarks (
+  seq       INTEGER PRIMARY KEY,
+  key       TEXT NOT NULL,
+  kind      TEXT NOT NULL,
+  ref       TEXT NOT NULL,
+  createdAt INTEGER
+);
+`;
 
 /**
  * Column names are the JSON contract's names, so an agent that learned the
@@ -101,7 +129,7 @@ CREATE TABLE IF NOT EXISTS setAsides (
   name   TEXT,
   amount REAL
 );
-`;
+${MARKS_TABLE}`;
 
 /**
  * What makes a query over the ledger right, kept in the file instead of only in
@@ -342,10 +370,19 @@ function rowsOf(db, table, columns) {
   return statement.all().map((row) => toRow((i) => row[columns[i]]));
 }
 
-/** The ledger in the JSON snapshot shape, or null when nothing has been written. */
+function hasTable(db, name) {
+  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+}
+
+/**
+ * The ledger in the JSON snapshot shape, or null when nothing has been written.
+ * `subscriptionMarks` appears only when there are some, so a ledger without
+ * them reads back in exactly the shape it was written in -- including one from
+ * before the table existed, which a read-only open cannot add it to.
+ */
 function readSnapshot(db) {
   if (!getMeta(db, "revision")) return null;
-  return {
+  const snapshot = {
     version: 1,
     savedAt: getMeta(db, "savedAt") ?? "",
     selectedMonth: getMeta(db, "selectedMonth") ?? "",
@@ -353,6 +390,33 @@ function readSnapshot(db) {
     rules: rowsOf(db, "rules", RULE_COLUMNS),
     setAsides: rowsOf(db, "setAsides", SET_ASIDE_COLUMNS),
   };
+  if (hasTable(db, "subscriptionMarks")) {
+    const marks = rowsOf(db, "subscriptionMarks", MARK_COLUMNS);
+    if (marks.length > 0) snapshot.subscriptionMarks = marks;
+  }
+  return snapshot;
+}
+
+/**
+ * Marks come from the browser, so they are held to their shape here rather
+ * than trusted: a known kind, short strings, and a bounded count.
+ */
+function checkMarks(marks) {
+  if (!Array.isArray(marks)) throw new LedgerShapeError("subscriptionMarks is not a list");
+  if (marks.length > MAX_MARKS) throw new LedgerShapeError("Too many subscription marks");
+  for (const m of marks) {
+    if (!isRecord(m)) throw new LedgerShapeError("A subscription mark is not an object");
+    if (typeof m.key !== "string" || m.key.length === 0 || m.key.length > MAX_MARK_KEY) {
+      throw new LedgerShapeError("A subscription mark has a bad key");
+    }
+    if (!MARK_KINDS.includes(m.kind)) throw new LedgerShapeError("A subscription mark has an unknown kind");
+    if (typeof m.ref !== "string" || m.ref.length > MAX_MARK_REF) {
+      throw new LedgerShapeError("A subscription mark has a bad ref");
+    }
+    if (m.createdAt !== undefined && m.createdAt !== null && !Number.isFinite(m.createdAt)) {
+      throw new LedgerShapeError("A subscription mark has a bad createdAt");
+    }
+  }
 }
 
 function isRecord(value) {
@@ -416,6 +480,13 @@ function replaceSnapshot(db, ledger) {
     throw err;
   }
   insertAll(db, "setAsides", SET_ASIDE_COLUMNS, ledger.setAsides, "set-aside");
+  // Absent means "this writer does not know about marks" (omakei-categorize.mjs,
+  // an older editor): leave them. An empty list is the editor clearing them.
+  if (ledger.subscriptionMarks !== undefined) {
+    checkMarks(ledger.subscriptionMarks);
+    db.exec("DELETE FROM subscriptionMarks");
+    insertAll(db, "subscriptionMarks", MARK_COLUMNS, ledger.subscriptionMarks, "subscription mark");
+  }
   setMeta(db, "savedAt", typeof ledger.savedAt === "string" ? ledger.savedAt : new Date().toISOString());
   setMeta(db, "selectedMonth", typeof ledger.selectedMonth === "string" ? ledger.selectedMonth : "");
   refreshDerived(db);
@@ -472,6 +543,7 @@ export async function updateLedgerDb(dir, decide, { create = true } = {}) {
     if (!isOurs(db)) return null;
     db.exec("BEGIN IMMEDIATE");
     try {
+      db.exec(MARKS_TABLE);
       const etag = etagOf(db);
       let current;
       const view = {
