@@ -42,6 +42,7 @@ either.
 | `categories` | each category's `id`, `name`, and `"group"` |
 | `rules` | the user's own categorize rules |
 | `setAsides` | monthly reserves |
+| `importedFiles` | statement files the drop-folder import has read: `path`, `sha256`, `status` (`imported`, `duplicate`, `failed`), `added`, `reason` — see `docs/spec/auto-import.md` |
 | `subscriptionMarks` | what the user said about a recurring charge: `key`, `kind` (`not-subscription`, `price-up`, `new`, `stopped`), `ref` — see `docs/spec/subscriptions.md` |
 | `meta` | `key`/`value` pairs: `savedAt`, `selectedMonth`, `revision`, `schemaVersion` |
 
@@ -58,6 +59,7 @@ insertion order; ignore it otherwise. The editor, the bar widget, and
   rules: CategorizeRule[],  // only the user's own; the defaults ship in the build
   setAsides: SetAside[],
   subscriptionMarks?: SubscriptionMark[], // only present when there are some
+  importedFiles?: ImportRecord[],         // only present when there are some
 }
 
 Transaction {
@@ -76,6 +78,7 @@ Transaction {
 
 SetAside { id: string; name: string; amount: number }
 SubscriptionMark { key: string; kind: string; ref: string; createdAt: number }
+ImportRecord { path: string; sha256: string; size: number; status: string; added: number; reason: string; importedAt: number }
 ```
 
 One flat table. No per-month grouping — filter on `date LIKE '2026-08%'`

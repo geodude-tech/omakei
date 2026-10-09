@@ -451,3 +451,53 @@ test("a mark key full of SQL is stored as text, not run", async () => {
   assert.deepEqual(ledger.subscriptionMarks, sneaky);
   assert.equal(ledger.transactions.length, LEDGER.transactions.length);
 });
+
+/* ---------------------------------------------------------- import records */
+
+const SHA = "a".repeat(64);
+const IMPORTS = [
+  { path: "Credit_Card/2026-08.csv", sha256: SHA, size: 1200, status: "imported", added: 31, reason: "", importedAt: 1 },
+  { path: "Checking/odd.pdf", sha256: "b".repeat(64), size: 9, status: "failed", added: 0, reason: "unreadable", importedAt: 2 },
+];
+
+test("import records round-trip, and a writer that sends none leaves them alone", async () => {
+  const dir = folder();
+  await write(dir, { ...LEDGER, importedFiles: IMPORTS });
+  assert.deepEqual((await readLedgerDb(dir)).ledger.importedFiles, IMPORTS);
+  // The editor and omakei-categorize.mjs never send importedFiles.
+  await write(dir, { ...LEDGER, selectedMonth: "2026-09", subscriptionMarks: [] });
+  assert.deepEqual((await readLedgerDb(dir)).ledger.importedFiles, IMPORTS);
+  assert.equal(statSync(join(dir, DB_FILENAME)).mode & 0o777, 0o600);
+});
+
+test("a ledger from before import records gains the table on its next write", async () => {
+  const dir = folder();
+  await write(dir, LEDGER);
+  const raw = new DatabaseSync(join(dir, DB_FILENAME));
+  raw.exec("DROP TABLE importedFiles");
+  raw.close();
+  assert.deepEqual((await readLedgerDb(dir)).ledger, LEDGER);
+  await write(dir, { ...LEDGER, importedFiles: IMPORTS });
+  assert.deepEqual((await readLedgerDb(dir)).ledger.importedFiles, IMPORTS);
+});
+
+test("a malformed import record is refused and changes nothing", async () => {
+  const dir = folder();
+  const saved = await write(dir, { ...LEDGER, importedFiles: IMPORTS });
+  const ok = IMPORTS[0];
+  for (const importedFiles of [
+    "nope",
+    [{ ...ok, path: "" }],
+    [{ ...ok, path: "p".repeat(1025) }],
+    [{ ...ok, sha256: "not-a-hash" }],
+    [{ ...ok, status: "deleted" }],
+    [{ ...ok, reason: "r".repeat(121) }],
+    [{ ...ok, added: "lots" }],
+    [{ ...ok, extra: 1 }],
+  ]) {
+    await assert.rejects(write(dir, { ...LEDGER, importedFiles }), LedgerShapeError);
+  }
+  const read = await readLedgerDb(dir);
+  assert.equal(read.etag, saved.etag);
+  assert.deepEqual(read.ledger.importedFiles, IMPORTS);
+});
