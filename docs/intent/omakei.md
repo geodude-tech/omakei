@@ -68,9 +68,8 @@ there. Anyone who turns it on must be told plainly where their data goes:
 **In the default laptop mode:**
 
 - Your statements, the ledger file, and your categories stay on your laptop.
-  Omakei itself uploads nothing and has no account. Its one outside request is
-  the dashboard page loading its fonts from Google Fonts, which carries no
-  ledger data.
+  Omakei itself uploads nothing, has no account, and makes no requests to
+  other hosts. The dashboard's fonts ship with the plugin.
 - If you ask an agent about your money (Grok Bot or any other), whatever the
   agent reads goes to that agent's service, along with your questions and its
   answers. Usually that is the summaries or the rows it asked for. An agent
