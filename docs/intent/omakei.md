@@ -60,6 +60,7 @@ there. Anyone who turns it on must be told plainly where their data goes:
   machine. That data includes transaction dates, amounts, merchant names and
   descriptions, account names and, usually, the last 4 digits of the account
   number, plus balances (and, for cards and loans, details like the payment due).
+  If you link investment accounts, it also includes holdings and trades.
 - The ledger and your categories are stored on the bot's machine, not your laptop.
 - Any statement files you send the bot (by email or chat) are stored there too.
 - The questions you ask and the bot's answers go through the Grok service.
@@ -67,16 +68,18 @@ there. Anyone who turns it on must be told plainly where their data goes:
 **In the default laptop mode:**
 
 - Your statements, the ledger file, and your categories stay on your laptop.
-  Omakei itself uploads nothing, has no account, and makes no network calls.
-- If you ask an agent about your money (Grok Bot or any other), the agent sees
-  only what it reads: the summaries or the rows it asked for. Those, plus your
-  questions and its answers, go to that agent's service. The files themselves
-  don't.
+  Omakei itself uploads nothing and has no account. Its one outside request is
+  the dashboard page loading its fonts from Google Fonts, which carries no
+  ledger data.
+- If you ask an agent about your money (Grok Bot or any other), whatever the
+  agent reads goes to that agent's service, along with your questions and its
+  answers. Usually that is the summaries or the rows it asked for. An agent
+  that opens the ledger or a statement file sends what it read from that file.
 
 There's also a mixed setup: the ledger stays on the laptop, but the bot pulls
 from a bank connection and passes the rows along. In that setup your bank data
-goes through the provider and the bot on the way, even though it's stored only
-on your laptop. Say so when you set it up.
+goes through the provider and the bot on the way, even though the ledger lives
+only on your laptop. Say so when you set it up.
 
 ## Consequences
 
