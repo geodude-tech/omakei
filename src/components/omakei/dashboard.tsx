@@ -23,6 +23,7 @@ import { Pager } from "@/components/omakei/pager";
 import { RulesSheet } from "@/components/omakei/rules-sheet";
 import { AddSetAsideCell, SetAsideStat } from "@/components/omakei/set-aside-stat";
 import { Stat } from "@/components/omakei/stat";
+import { SubscriptionsCard } from "@/components/omakei/subscriptions";
 import { TransactionRow } from "@/components/omakei/transaction-row";
 import {
   AlertDialog,
@@ -483,6 +484,8 @@ export function Dashboard() {
           monthTransactions={monthTx}
           setAsides={setAsides}
         />
+
+        {detailsReady ? <SubscriptionsCard transactions={transactions} /> : null}
 
         {detailsReady && unknowns.length > 0 ? (
           <NeedsCategoryPanel

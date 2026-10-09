@@ -366,3 +366,88 @@ test("a new database is readable by its owner only", async () => {
   await write(dir, LEDGER);
   assert.equal(statSync(join(dir, DB_FILENAME)).mode & 0o777, 0o600);
 });
+
+/* ------------------------------------------------------ subscription marks */
+
+const MARKS = [
+  { key: "netflix", kind: "not-subscription", ref: "", createdAt: 1724800000000 },
+  { key: "spotify", kind: "price-up", ref: "1399", createdAt: 1724800000001 },
+];
+
+test("subscription marks round-trip, and a ledger without any reads back with no key", async () => {
+  const dir = folder();
+  await write(dir, { ...LEDGER, subscriptionMarks: MARKS });
+  assert.deepEqual((await readLedgerDb(dir)).ledger.subscriptionMarks, MARKS);
+
+  await write(dir, { ...LEDGER, subscriptionMarks: [] });
+  assert.equal("subscriptionMarks" in (await readLedgerDb(dir)).ledger, false, "[] clears them");
+});
+
+test("a writer that sends no marks leaves them alone", async () => {
+  // omakei-categorize.mjs and an older editor build their snapshot with no
+  // subscriptionMarks key; a rule change must not forget the user's choices.
+  const dir = folder();
+  await write(dir, { ...LEDGER, subscriptionMarks: MARKS });
+  await write(dir, { ...LEDGER, selectedMonth: "2026-09" });
+  const { ledger } = await readLedgerDb(dir);
+  assert.equal(ledger.selectedMonth, "2026-09");
+  assert.deepEqual(ledger.subscriptionMarks, MARKS);
+});
+
+test("a ledger from before marks reads unchanged and gains the table on its next write", async () => {
+  const dir = folder();
+  await write(dir, LEDGER);
+  // What a ledger saved by the previous release looks like: no table at all.
+  const raw = new DatabaseSync(join(dir, DB_FILENAME));
+  raw.exec("DROP TABLE subscriptionMarks");
+  const versionBefore = raw.prepare("SELECT value FROM meta WHERE key = 'schemaVersion'").get().value;
+  raw.close();
+
+  assert.deepEqual((await readLedgerDb(dir)).ledger, LEDGER, "readable, with no marks key");
+  await write(dir, { ...LEDGER, subscriptionMarks: MARKS });
+  assert.deepEqual((await readLedgerDb(dir)).ledger.subscriptionMarks, MARKS);
+  const [{ value }] = query(dir, "SELECT value FROM meta WHERE key = 'schemaVersion'");
+  assert.equal(value, versionBefore, "additive: no schema version bump");
+  assert.equal(statSync(join(dir, DB_FILENAME)).mode & 0o777, 0o600);
+});
+
+test("a write a decision declines does not add the marks table to an old ledger", async () => {
+  const dir = folder();
+  await write(dir, LEDGER);
+  const raw = new DatabaseSync(join(dir, DB_FILENAME));
+  raw.exec("DROP TABLE subscriptionMarks");
+  raw.close();
+  await updateLedgerDb(dir, () => null);
+  assert.deepEqual(query(dir, "SELECT name FROM sqlite_master WHERE name = 'subscriptionMarks'"), []);
+});
+
+test("a malformed subscription mark is refused and changes nothing", async () => {
+  const dir = folder();
+  const saved = await write(dir, { ...LEDGER, subscriptionMarks: MARKS });
+  const bad = [
+    "not a list",
+    [{ key: "x", kind: "delete-everything", ref: "" }],
+    [{ key: "", kind: "new", ref: "" }],
+    [{ key: "k".repeat(201), kind: "new", ref: "" }],
+    [{ key: "x", kind: "new", ref: "r".repeat(41) }],
+    [{ key: "x", kind: "new", ref: 5 }],
+    [{ key: "x", kind: "new", ref: "", note: "<img src=x onerror=alert(1)>" }],
+    [{ key: "x", kind: "new", ref: "", createdAt: "soon" }],
+    Array.from({ length: 5001 }, (_, i) => ({ key: `k${i}`, kind: "new", ref: "" })),
+  ];
+  for (const subscriptionMarks of bad) {
+    await assert.rejects(write(dir, { ...LEDGER, subscriptionMarks }), LedgerShapeError, JSON.stringify(subscriptionMarks).slice(0, 80));
+  }
+  const read = await readLedgerDb(dir);
+  assert.equal(read.etag, saved.etag);
+  assert.deepEqual(read.ledger.subscriptionMarks, MARKS);
+});
+
+test("a mark key full of SQL is stored as text, not run", async () => {
+  const dir = folder();
+  const sneaky = [{ key: "x'); DROP TABLE transactions; --", kind: "not-subscription", ref: "", createdAt: 1 }];
+  await write(dir, { ...LEDGER, subscriptionMarks: sneaky });
+  const { ledger } = await readLedgerDb(dir);
+  assert.deepEqual(ledger.subscriptionMarks, sneaky);
+  assert.equal(ledger.transactions.length, LEDGER.transactions.length);
+});

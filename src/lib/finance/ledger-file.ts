@@ -7,6 +7,7 @@
  */
 import { refreshCategories, seedRules } from "./ledger.ts";
 import { parseSetAsides } from "./set-asides.ts";
+import { parseSubscriptionMarks, type SubscriptionMark } from "./subscriptions.ts";
 import type { CategorizeRule, SetAside, Transaction } from "./types.ts";
 
 export const LEDGER_FILENAME = "omakei-ledger.sqlite";
@@ -19,6 +20,8 @@ export type LedgerSnapshot = {
   transactions: Transaction[];
   rules: CategorizeRule[];
   setAsides: SetAside[];
+  /** What the user said about recurring charges. Always sent: [] clears them. */
+  subscriptionMarks: SubscriptionMark[];
 };
 
 export type PersistableLedger = {
@@ -26,6 +29,7 @@ export type PersistableLedger = {
   rules: CategorizeRule[];
   selectedMonth: string;
   setAsides?: SetAside[];
+  subscriptionMarks?: SubscriptionMark[];
 };
 
 export function snapshotFromState(state: PersistableLedger): LedgerSnapshot {
@@ -37,6 +41,7 @@ export function snapshotFromState(state: PersistableLedger): LedgerSnapshot {
     // Only the user's own rules are stored; the defaults ship with the build.
     rules: state.rules.filter((r) => r.source === "user"),
     setAsides: parseSetAsides(state.setAsides),
+    subscriptionMarks: parseSubscriptionMarks(state.subscriptionMarks),
   };
 }
 
@@ -58,6 +63,7 @@ export function parseLedgerData(raw: unknown): LedgerSnapshot | null {
     ),
     rules: [...userRules, ...seedRules()],
     setAsides: parseSetAsides(data.setAsides),
+    subscriptionMarks: parseSubscriptionMarks(data.subscriptionMarks),
   };
 }
 
@@ -82,9 +88,9 @@ export function parseLedgerData(raw: unknown): LedgerSnapshot | null {
  *   `pinnedCategoryId`, which is kept from whichever side has one.
  * - **User rules** merge by pattern, newest `createdAt` winning, which is the
  *   same rule `upsertRule` follows when one person edits twice.
- * - **Set-asides and the selected month** are ours. Nothing else writes them:
- *   the CLI does not touch them, and a second tab losing its month is not a
- *   loss worth a merge.
+ * - **Set-asides, subscription marks, and the selected month** are ours.
+ *   Nothing else writes them: the CLI does not touch them, and a second tab
+ *   losing its month is not a loss worth a merge.
  *
  * Then every category is re-derived from the merged rules, so the file we write
  * is consistent rather than carrying whichever categories each side happened to
@@ -119,6 +125,7 @@ export function mergeSnapshots(mine: LedgerSnapshot, theirs: LedgerSnapshot): Le
     transactions: refreshCategories([...byId.values()], [...rules, ...seedRules()]),
     rules,
     setAsides: mine.setAsides,
+    subscriptionMarks: mine.subscriptionMarks,
   };
 }
 

@@ -49,8 +49,8 @@ export function encodeInlineJson(value) {
 /** Theme-dependent, so it happens per request. `theme` null means Omakei's own defaults. */
 export function injectHead(html, theme) {
   return html
-    .replace('<html lang="en">', `<html lang="en" class="${htmlClass(theme)}">`)
-    .replace("<!--omakei:head-->", renderHead(theme));
+    .replace('<html lang="en">', () => `<html lang="en" class="${htmlClass(theme)}">`)
+    .replace("<!--omakei:head-->", () => renderHead(theme));
 }
 
 /**
@@ -61,10 +61,11 @@ export function injectState(html, state) {
   if (!state) return html.replace("<!--omakei:state-->", "");
   const encoded = encodeInlineJson(state);
   if (encoded.length > MAX_INLINE_STATE_BYTES) return html.replace("<!--omakei:state-->", "");
-  return html.replace(
-    "<!--omakei:state-->",
-    `<script>window.__OMAKEI_STATE=${encoded}</script>`,
-  );
+  // A function, not a string: a replacement string expands `$'`, `$\``, and
+  // `$&`, and the ledger is bank text anyone can name a merchant -- one
+  // description holding `$'` would paste raw page HTML into the payload.
+  const script = `<script>window.__OMAKEI_STATE=${encoded}</script>`;
+  return html.replace("<!--omakei:state-->", () => script);
 }
 
 export function applyShell(html, theme, state) {

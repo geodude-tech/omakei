@@ -42,6 +42,7 @@ either.
 | `categories` | each category's `id`, `name`, and `"group"` |
 | `rules` | the user's own categorize rules |
 | `setAsides` | monthly reserves |
+| `subscriptionMarks` | what the user said about a recurring charge: `key`, `kind` (`not-subscription`, `price-up`, `new`, `stopped`), `ref` — see `docs/spec/subscriptions.md` |
 | `meta` | `key`/`value` pairs: `savedAt`, `selectedMonth`, `revision`, `schemaVersion` |
 
 Columns carry the same names as the fields below. `seq` on each table is
@@ -56,6 +57,7 @@ insertion order; ignore it otherwise. The editor, the bar widget, and
   transactions: Transaction[],
   rules: CategorizeRule[],  // only the user's own; the defaults ship in the build
   setAsides: SetAside[],
+  subscriptionMarks?: SubscriptionMark[], // only present when there are some
 }
 
 Transaction {
@@ -73,6 +75,7 @@ Transaction {
 }
 
 SetAside { id: string; name: string; amount: number }
+SubscriptionMark { key: string; kind: string; ref: string; createdAt: number }
 ```
 
 One flat table. No per-month grouping — filter on `date LIKE '2026-08%'`

@@ -109,3 +109,28 @@ test("categorizeOne on a check pins it even when asked to always apply", () => {
     ["childcare", null],
   );
 });
+
+test("marking a subscription persists in the store, once, and unmarking removes only that mark", () => {
+  useLedgerStore.getState().loadSnapshot({ transactions: [], rules: snapshotRules(), selectedMonth: "2026-08", subscriptionMarks: [] });
+  const { markSubscription, unmarkSubscription } = useLedgerStore.getState();
+  markSubscription("netflix", "not-subscription", "");
+  markSubscription("netflix", "not-subscription", "");
+  markSubscription("spotify", "price-up", "1399");
+  assert.deepEqual(
+    useLedgerStore.getState().subscriptionMarks.map((m) => [m.key, m.kind, m.ref]),
+    [["netflix", "not-subscription", ""], ["spotify", "price-up", "1399"]],
+  );
+  unmarkSubscription("netflix", "not-subscription", "");
+  assert.deepEqual(useLedgerStore.getState().subscriptionMarks.map((m) => m.key), ["spotify"]);
+});
+
+test("loading a snapshot replaces the marks with the ledger's", () => {
+  useLedgerStore.getState().markSubscription("stale", "new", "2026-01-01");
+  useLedgerStore.getState().loadSnapshot({
+    transactions: [],
+    rules: snapshotRules(),
+    selectedMonth: "2026-08",
+    subscriptionMarks: [{ key: "hulu", kind: "stopped", ref: "2026-05-01", createdAt: 1 }],
+  });
+  assert.deepEqual(useLedgerStore.getState().subscriptionMarks.map((m) => m.key), ["hulu"]);
+});

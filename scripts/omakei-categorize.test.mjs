@@ -321,3 +321,14 @@ test("--stdin with --remove is refused rather than reinterpreted", async () => {
   assert.match(stderr, /only for adding or updating/);
   await unchanged(ledgerDir, before);
 });
+
+test("a categorize write keeps the user's subscription marks", async () => {
+  const { home, ledgerDir } = await attachedLedger(TX);
+  const marks = [{ key: "netflix", kind: "not-subscription", ref: "", createdAt: 1 }];
+  await updateLedgerDb(ledgerDir, ({ ledger }) => ({ ...ledger, subscriptionMarks: marks }));
+  const { status } = cli(["zorp widgets", "shopping"], home);
+  assert.equal(status, 0);
+  const written = await readLedger(ledgerDir);
+  assert.equal(written.rules.length, 1, "the rule landed");
+  assert.deepEqual(written.subscriptionMarks, marks);
+});
