@@ -8,7 +8,7 @@ import { CATEGORY_BY_ID } from "./categories.ts";
 import { isIncome, isSpend } from "./ledger.ts";
 import { availableNet, setAsideTotal } from "./set-asides.ts";
 import type { SetAside, Transaction } from "./types.ts";
-import { formatDay, monthKey } from "../utils.ts";
+import { formatDay, monthKey } from "../dates.ts";
 
 export type CategoryTotal = { id: string; name: string; total: number };
 export type DailySpend = { day: string; spent: number; label: string };

@@ -115,6 +115,27 @@ That is the whole idea. The dashboard shows the answers you got tired of asking 
 
 Before the first question, give the agent [`docs/ledger.md`](docs/ledger.md). It says where the file is and the handful of rules that make a total come out right — chief among them that transfers between your own accounts are not spending. Skip it and a credit-card payment gets counted as money spent, which quietly inflates every figure that matters.
 
+### Asking from a script: `omakei.mjs`
+
+For an agent or a script that would rather not write SQL, there is one
+read-only command that answers the common questions with the same rules the
+dashboard uses:
+
+```sh
+node ~/.config/omarchy/plugins/omakei/scripts/omakei.mjs info
+node ~/.config/omarchy/plugins/omakei/scripts/omakei.mjs summary --month 2026-08
+node ~/.config/omarchy/plugins/omakei/scripts/omakei.mjs tx --category dining --from 2026-06-01
+```
+
+- `info`: where the ledger is, how many transactions, the date range, the accounts, and the version.
+- `summary [--month YYYY-MM] [--top N]`: a month's income, spend, cashflow, set-asides, net, uncategorized, and top categories. Defaults to this month.
+- `tx [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--account NAME] [--category ID] [--uncategorized] [--search TEXT] [--limit N]`: matching transactions, newest first, with spend and income totals over every match. `--limit` defaults to 500.
+
+Each prints one JSON object, `{"ok": true, "version", "schemaVersion", "command", "data"}`,
+or `{"ok": false, ..., "error": {"code", "message"}}` with a nonzero exit (2 for a
+bad option, 1 when there is no ledger). It finds the ledger the same way the bar
+widget does (`--ledger PATH` overrides that), opens it read-only, and writes nothing.
+
 ### Pinning an answer
 
 Each card on the dashboard is one file in `src/panels/`. If an answer is worth seeing every day, an agent can write a panel for it: a small component that reads the ledger and renders a number, a chart, or a single sentence. A panel that has nothing to say renders nothing, so a card only appears in the months it matters.

@@ -8,7 +8,7 @@
 import { CATEGORY_BY_ID } from "./categories.ts";
 import { isSpend } from "./ledger.ts";
 import type { Transaction } from "./types.ts";
-import { monthKey, shiftMonth } from "../utils.ts";
+import { monthKey, shiftMonth } from "../dates.ts";
 
 export type Drift = {
   id: string;
