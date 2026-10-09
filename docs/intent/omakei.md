@@ -28,17 +28,55 @@ questions that turned out to be worth watching every day. The loop is:
   brakes on restaurants until next month." The data was there; the verdict wasn't.
 - **Success:** Ask an agent a question, get an answer from the ledger, say "pin
   it," and a panel appears — without hand-writing React or fighting the build.
-- **Constraint:** Fast and boring. Basic beats fancy. Nothing leaves the machine.
+- **Constraint:** Fast and boring. Basic beats fancy. Local-first: by default
+  nothing leaves the machine, and the ledger on your laptop is the source of
+  truth. The one exception is the opt-in Grok-hosted mode below, which you have
+  to turn on yourself.
 
 ## Out of scope
 
 - **Any AI interface inside the app.** No chat UI, no model calls, no API key.
   The agent lives in the terminal — Claude Code or any other harness — and points
   at the ledger. The app stays deliberately dumb.
-- **Auto-pulling statements from banks.** Wanted eventually, explicitly farther
-  out. Today the user drops exports into a folder.
+- **Auto-pulling statements from banks in the default mode.** On the laptop,
+  you still drop exports into a folder. A bank connection is in scope only as
+  part of the opt-in Grok-hosted mode below.
 - **The bar widget as the thing being built.** It stays — it is the hook, and the
   reason Omarchy is the right beachhead. It stops driving design decisions.
+
+## Optional: Grok-hosted mode
+
+_Added 2026-10-09._ In scope, opt-in, never the default.
+
+The ledger and the categorizing can run on your Grok Bot machine instead of
+your laptop, and that ledger can be fed by a bank connection added through the
+bot. It's the same code with no app on top: the bot runs Omakei's scripts
+there. Anyone who turns it on must be told plainly where their data goes:
+
+**What leaves your machine in Grok-hosted mode with a bank connection:**
+
+- Your bank sends your account data to the bank-connection provider (for
+  example Plaid), which passes it on to the Grok Bot service and the bot's
+  machine. That data includes transaction dates, amounts, merchant names and
+  descriptions, account names and, usually, the last 4 digits of the account
+  number, plus balances (and, for cards and loans, details like the payment due).
+- The ledger and your categories are stored on the bot's machine, not your laptop.
+- Any statement files you send the bot (by email or chat) are stored there too.
+- The questions you ask and the bot's answers go through the Grok service.
+
+**In the default laptop mode:**
+
+- Your statements, the ledger file, and your categories stay on your laptop.
+  Omakei itself uploads nothing, has no account, and makes no network calls.
+- If you ask an agent about your money (Grok Bot or any other), the agent sees
+  only what it reads: the summaries or the rows it asked for. Those, plus your
+  questions and its answers, go to that agent's service. The files themselves
+  don't.
+
+There's also a mixed setup: the ledger stays on the laptop, but the bot pulls
+from a bank connection and passes the rows along. In that setup your bank data
+goes through the provider and the bot on the way, even though it's stored only
+on your laptop. Say so when you set it up.
 
 ## Consequences
 
