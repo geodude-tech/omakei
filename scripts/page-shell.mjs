@@ -9,22 +9,12 @@
  */
 import { loadOmarchyTheme, renderOmarchyThemeCss } from "./omarchy-theme.mjs";
 
-const MONO_FONT =
-  "https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,500&display=swap";
-const SERIF_FONT =
-  "https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700&display=swap";
-
 /** Past this, inlining costs more than the round-trip it saves. */
 const MAX_INLINE_STATE_BYTES = 4 * 1024 * 1024;
 
 export function renderHead(theme) {
   const on = Boolean(theme && theme.enabled !== false);
-  const parts = [
-    `<meta name="theme-color" content="${on ? theme.background : "#F3EFE7"}" />`,
-    `<link rel="preconnect" href="https://fonts.googleapis.com" />`,
-    `<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />`,
-    `<link rel="stylesheet" href="${on ? MONO_FONT : SERIF_FONT}" />`,
-  ];
+  const parts = [`<meta name="theme-color" content="${on ? theme.background : "#F3EFE7"}" />`];
   const css = on ? renderOmarchyThemeCss(theme) : "";
   if (css) parts.push(`<style id="omarchy-theme">${css}</style>`);
   return parts.join("\n    ");
