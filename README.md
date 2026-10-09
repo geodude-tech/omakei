@@ -128,12 +128,14 @@ node ~/.config/omarchy/plugins/omakei/scripts/omakei.mjs tx --category dining --
 ```
 
 - `info`: where the ledger is, how many transactions, the date range, the accounts, and the version.
-- `summary [--month YYYY-MM] [--top N]`: a month's income, spend, cashflow, set-asides, net, uncategorized, and top categories. Defaults to this month.
-- `tx [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--account NAME] [--category ID] [--uncategorized] [--search TEXT] [--limit N]`: matching transactions, newest first, with spend and income totals over every match. `--limit` defaults to 500.
+- `summary [--month YYYY-MM] [--top N]`: a month's income, spend, cashflow, set-asides, net, uncategorized, and top categories. Uncategorized spend is its own `uncategorized` entry in the top categories. Defaults to this month. `--top` defaults to 5, and a value above 20 counts as 20.
+- `tx [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--account NAME] [--category ID] [--uncategorized] [--search TEXT] [--limit N]`: matching transactions, newest first, with spend and income totals over every match. `--limit` defaults to 500, and a value above 5000 counts as 5000. When rows are cut, `truncated` is `true`.
 
-Each prints one JSON object, `{"ok": true, "version", "schemaVersion", "command", "data"}`,
+Each prints one JSON object, `{"ok": true, "version", "outputVersion", "command", "data"}`,
 or `{"ok": false, ..., "error": {"code", "message"}}` with a nonzero exit (2 for a
-bad option, 1 when there is no ledger). It finds the ledger the same way the bar
+bad option, 1 when there is no ledger). `outputVersion` is the version of this
+JSON shape, and it changes only when the shape does. `--help` or `-h` prints the
+usage in `data.usage` and exits 0. It finds the ledger the same way the bar
 widget does (`--ledger PATH` overrides that), opens it read-only, and writes nothing.
 
 ### Pinning an answer

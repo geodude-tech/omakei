@@ -7,7 +7,6 @@
  */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { SCHEMA_VERSION } from "./ledger-db.mjs";
 import { readLedgerForWidget } from "./omakei-read-ledger.mjs";
 import { CATEGORY_BY_ID } from "../src/lib/finance/categories.ts";
 import { isIncome, isSpend } from "../src/lib/finance/ledger.ts";
@@ -15,9 +14,12 @@ import { parseSetAsides, roundMoney } from "../src/lib/finance/set-asides.ts";
 import { categoryTotals, monthSummary } from "../src/lib/finance/summaries.ts";
 import { monthKey, todayIso } from "../src/lib/dates.ts";
 
+const OUTPUT_VERSION = 1;
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 5000;
 const DEFAULT_TOP = 5;
+const MAX_TOP = 20;
+const HELP_FLAGS = ["--help", "-h"];
 
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 const DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
@@ -39,11 +41,13 @@ class CliError extends Error {
   }
 }
 const usage = (message) => new CliError("usage", message, 2);
+class HelpRequested {}
 
 function parseArgs(argv, { values = [], flags = [] } = {}) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (HELP_FLAGS.includes(arg)) throw new HelpRequested();
     if (!arg.startsWith("--")) throw usage(`Unexpected argument: ${arg}`);
     const eq = arg.indexOf("=");
     const name = eq === -1 ? arg.slice(2) : arg.slice(2, eq);
@@ -146,7 +150,11 @@ function summaryData({ ledger }, { month, top = DEFAULT_TOP }) {
     (sum, tx) => (isSpend(tx) && !tx.categoryId ? sum + Math.abs(tx.amount) : sum),
     0,
   );
-  const categories = categoryTotals(rows);
+  const categories = categoryTotals(rows.filter((tx) => tx.categoryId));
+  if (uncategorizedSpent > 0) {
+    categories.push({ id: "uncategorized", name: "Uncategorized", total: uncategorizedSpent });
+    categories.sort((a, b) => b.total - a.total);
+  }
   const spent = roundMoney(stats.spent);
   return {
     month,
@@ -222,7 +230,7 @@ const COMMANDS = {
     const args = parseArgs(argv, { values: ["ledger", "month", "top"] });
     const month = args.month ?? monthKey(ctx.today);
     if (!MONTH.test(month)) throw usage("--month must look like YYYY-MM");
-    const top = positiveInt("top", args.top, 20) ?? DEFAULT_TOP;
+    const top = positiveInt("top", args.top, MAX_TOP) ?? DEFAULT_TOP;
     return summaryData(await loadLedger(args.ledger, ctx), { month, top });
   },
   async tx(argv, ctx) {
@@ -256,8 +264,10 @@ const COMMANDS = {
 };
 
 const USAGE =
-  "omakei.mjs <info|summary|tx> [options]  (summary: --month YYYY-MM --top N; " +
-  "tx: --from --to --account --category --uncategorized --search --limit; all: --ledger PATH)";
+  "omakei.mjs <info|summary|tx> [options]  (summary: --month YYYY-MM --top N, " +
+  `default ${DEFAULT_TOP}, at most ${MAX_TOP}; tx: --from --to --account --category ` +
+  `--uncategorized --search --limit N, default ${DEFAULT_LIMIT}, at most ${MAX_LIMIT}; ` +
+  "all: --ledger PATH, --help)";
 
 export async function run(
   argv,
@@ -267,19 +277,27 @@ export async function run(
   const envelope = {
     ok: true,
     version: readVersion(),
-    schemaVersion: SCHEMA_VERSION,
+    outputVersion: OUTPUT_VERSION,
     command: command ?? null,
   };
   let code = 0;
   try {
+    if (HELP_FLAGS.includes(command)) throw new HelpRequested();
     const handler = command && Object.hasOwn(COMMANDS, command) ? COMMANDS[command] : null;
     if (!handler) throw usage(command ? `Unknown command: ${command}. ${USAGE}` : USAGE);
     envelope.data = await handler(rest, { env, home, today });
   } catch (err) {
-    const known = err instanceof CliError;
-    envelope.ok = false;
-    envelope.error = { code: known ? err.code : "internal", message: String(err?.message ?? err) };
-    code = known ? err.exitCode : 1;
+    if (err instanceof HelpRequested) {
+      envelope.data = { usage: USAGE };
+    } else {
+      const known = err instanceof CliError;
+      envelope.ok = false;
+      envelope.error = {
+        code: known ? err.code : "internal",
+        message: String(err?.message ?? err),
+      };
+      code = known ? err.exitCode : 1;
+    }
   }
   out.write(`${JSON.stringify(envelope)}\n`);
   return code;

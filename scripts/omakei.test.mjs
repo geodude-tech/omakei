@@ -102,14 +102,14 @@ function syntheticLedger() {
 }
 
 /** A home whose state file points at a statements folder, with the ledger where the editor puts it. */
-async function attachedHome() {
+async function attachedHome(ledger = syntheticLedger()) {
   const home = privateDir();
   const env = { XDG_STATE_HOME: join(home, "state") };
   const statements = join(home, "statements");
   mkdirSync(statements, { recursive: true });
   const ledgerDir = ledgerDirFor(statements, env, home);
   mkdirSync(ledgerDir, { recursive: true, mode: 0o700 });
-  assert.ok(await updateLedgerDb(ledgerDir, () => syntheticLedger()));
+  assert.ok(await updateLedgerDb(ledgerDir, () => ledger));
   writeFileSync(
     join(env.XDG_STATE_HOME, "omakei", "state.json"),
     renderStateFile(statements, ledgerDir),
@@ -132,7 +132,8 @@ test("info finds the ledger through state.json, under ledgers/<id>/", async () =
   assert.equal(body.ok, true);
   assert.equal(body.command, "info");
   assert.equal(body.version, JSON.parse(readFileSync(join(ROOT, "manifest.json"), "utf8")).version);
-  assert.equal(typeof body.schemaVersion, "number");
+  assert.deepEqual(Object.keys(body), ["ok", "version", "outputVersion", "command", "data"]);
+  assert.equal(body.outputVersion, 1);
   assert.equal(body.data.ledgerPath, file);
   assert.match(body.data.ledgerPath, /\/omakei\/ledgers\/[0-9a-f]{16}\/omakei-ledger\.sqlite$/);
   assert.equal(body.data.transactionCount, 14);
@@ -164,7 +165,7 @@ test("summary matches the dashboard: transfers left out, uncategorized counted, 
       ["housing", "Housing", 1500],
       ["groceries", "Groceries", 120.25],
       ["dining", "Dining", 75.5],
-      ["other", "Other", 19.99],
+      ["uncategorized", "Uncategorized", 19.99],
     ],
   );
   assert.equal(d.topCategories[0].share, 0.874);
@@ -183,6 +184,23 @@ test("summary --month picks another month, and --top trims the categories", asyn
     body.data.topCategories.map((c) => c.id),
     ["groceries"],
   );
+  assert.equal(body.data.categoryCount, 2);
+});
+
+test("summary lists uncategorized spend apart from the Other category", async () => {
+  seq = 0;
+  const { home, env } = await attachedHome({
+    ...syntheticLedger(),
+    transactions: [
+      row("2026-09-03", "ODDS AND ENDS", -7, "other"),
+      row("2026-09-04", "UNKNOWN SHOP", -19.99, null),
+    ],
+  });
+  const { body } = await call(["summary"], { home, env });
+  assert.deepEqual(body.data.topCategories, [
+    { id: "uncategorized", name: "Uncategorized", spent: 19.99, share: 0.741 },
+    { id: "other", name: "Other", spent: 7, share: 0.259 },
+  ]);
   assert.equal(body.data.categoryCount, 2);
 });
 
@@ -239,6 +257,46 @@ test("tx filters by date, category, account, and text, newest first, with totals
     { spent: 135.5, income: 0 },
     "totals cover every match, not just the page",
   );
+});
+
+test("--limit above 5000 returns 5000 rows and says the rest were cut", async () => {
+  seq = 0;
+  const transactions = Array.from({ length: 5001 }, () =>
+    row("2026-09-10", "TINY PURCHASE", -1, "shopping"),
+  );
+  const { home, env } = await attachedHome({ ...syntheticLedger(), transactions });
+  const { body } = await call(["tx", "--limit", "9999"], { home, env });
+  assert.equal(body.data.matched, 5001);
+  assert.equal(body.data.returned, 5000);
+  assert.equal(body.data.transactions.length, 5000);
+  assert.equal(body.data.truncated, true);
+  assert.deepEqual(body.data.totals, { spent: 5001, income: 0 });
+});
+
+test("--help and -h print the usage and exit 0", async () => {
+  const { home, env } = await attachedHome();
+  for (const argv of [
+    ["--help"],
+    ["-h"],
+    ["tx", "--help"],
+    ["summary", "--month", "2026-09", "-h"],
+  ]) {
+    const { code, body } = await call(argv, { home, env });
+    assert.equal(code, 0, argv.join(" "));
+    assert.equal(body.ok, true);
+    assert.match(body.data.usage, /^omakei\.mjs <info\|summary\|tx>/);
+    assert.match(body.data.usage, /--top N, default 5, at most 20/);
+    assert.match(body.data.usage, /--limit N, default 500, at most 5000/);
+  }
+  const search = await call(["tx", "--search", "-h"], { home, env });
+  assert.deepEqual(search.body.data.filters, { search: "-h" }, "a value of -h is a value");
+
+  const res = spawnSync(process.execPath, [join(ROOT, "scripts", "omakei.mjs"), "--help"], {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, HOME: home },
+  });
+  assert.equal(res.status, 0);
+  assert.equal(JSON.parse(res.stdout).ok, true);
 });
 
 test("bad input is a JSON usage error with exit 2", async () => {
