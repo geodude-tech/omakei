@@ -205,10 +205,42 @@ test("two plans at one merchant are two subscriptions", () => {
 
 test("a monthly bill that varies is found and marked variable, with no price flag", () => {
   const amounts = [142.1, 98.4, 87.2, 120.55, 160.3, 190.75, 175.2, 110.9];
-  const rows = [...monthly("2026-02", 8, amounts, "PG&E WEB ONLINE"), ANCHOR];
+  const rows = [
+    ...monthly("2026-02", 8, amounts, "PG&E WEB ONLINE").map((t) => ({
+      ...t,
+      categoryId: "utilities",
+    })),
+    ANCHOR,
+  ];
   const [s] = findSubscriptions(rows, { today: "2026-09-30" }).subscriptions;
   assert.equal(s?.variable, true);
   assert.equal(s?.cadence, "monthly");
+  assert.deepEqual(s?.flags, []);
+});
+
+test("a regular visit whose bill changes is not a bill unless it is a bill category", () => {
+  // A salon booked about monthly is regular, and the total changes each time.
+  const amounts = [180, 240.5, 195, 260, 210.75, 230];
+  const salon = monthly("2026-03", 6, amounts, "VAGARO_*SALON").map((t) => ({
+    ...t,
+    categoryId: "personal-care",
+  }));
+  assert.deepEqual(
+    findSubscriptions([...salon, ANCHOR], { today: "2026-09-30" }).subscriptions,
+    [],
+  );
+  const uncategorized = monthly("2026-03", 6, amounts, "VAGARO_*SALON");
+  assert.deepEqual(
+    findSubscriptions([...uncategorized, ANCHOR], { today: "2026-09-30" }).subscriptions,
+    [],
+  );
+});
+
+test("a bill that wanders by a few dollars is never a price rise", () => {
+  const amounts = [137.29, 140.1, 135.5, 139.0, 137.3, 145.0];
+  const rows = [...monthly("2026-04", 6, amounts, "INLAND WATER DIST"), ANCHOR];
+  const [s] = findSubscriptions(rows, { today: "2026-09-30" }).subscriptions;
+  assert.equal(s?.variable, false);
   assert.deepEqual(s?.flags, []);
 });
 
@@ -313,7 +345,7 @@ test("a dismissed price rise comes back when the price rises again", () => {
     [],
   );
   const second = [
-    ...monthly("2026-01", 9, [10, 10, 10, 10, 10, 10, 10, 12, 15], "SPOTIFY USA"),
+    ...monthly("2026-01", 9, [10, 10, 10, 10, 10, 10, 12, 12, 15], "SPOTIFY USA"),
     tx("2026-09-30", -1, "A"),
   ];
   const flags = findSubscriptions(second, { today: "2026-09-30", marks }).subscriptions[0]!.flags;

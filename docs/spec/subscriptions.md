@@ -52,8 +52,9 @@ Pure function in `src/lib/finance/subscriptions.ts`.
    month in eight passes; a store visited "about monthly" does not).
 4. **Amount.** Fixed if at least 75% of consecutive charges differ by no more
    than 15% (or $2) — so one price rise still reads as fixed. Otherwise
-   variable — allowed only for monthly with at least 4 charges (an electric
-   bill), never weekly or yearly. Typical amount = median of the last three
+   variable — allowed only for a monthly bill category (`utilities`,
+   `insurance`, `housing`, `debt`, `childcare`) with at least 4 charges. An
+   electric bill passes; a salon visited about monthly does not. Typical amount = median of the last three
    charges.
 5. **Two plans, one merchant.** If a key fails 3–4 as a whole, its charges are
    split into amount bands (a new band when the next amount is more than 25%
@@ -75,7 +76,7 @@ later one shows again.
 
 | flag | when | ref |
 |---|---|---|
-| `price-up` | fixed amount; the last charge is at least 5% and $0.50 above the median of the up-to-six before it | last amount in cents |
+| `price-up` | fixed amount; a step up of at least 5% and $0.50 from a price that held (2+ charges within 0.5% or $0.10 of each other), seen in the last 3 charges | new amount in cents |
 | `new` | first charge within 90 days of as-of | first date |
 | `stopped` | as-of is more than 1.5 periods + 3 days past the last charge | last date |
 
@@ -142,9 +143,10 @@ names in the table (bank text could otherwise carry terminal escapes).
 ## Test plan
 
 - `src/lib/finance/subscriptions.test.ts`: monthly, yearly, weekly, price hike
-  (and its ageing out), new, stopped, long-stopped dropped, noisy merchant
-  names, two plans at one merchant, variable bill, groceries / dining / irregular
-  shopping not detected, transfers and checks ignored, marks hide and dismiss
+  (and its ageing out), a wandering bill never price-flagged, new, stopped,
+  long-stopped dropped, noisy merchant names, two plans at one merchant,
+  variable bill, a variable salon visit not detected, groceries / coffee /
+  irregular shopping not detected, transfers and checks ignored, marks hide and dismiss
   by ref, as-of capped by data.
 - `scripts/ledger-db.test.mjs`: marks round-trip; absent key keeps them; `[]`
   clears; bad kind / long key refused; a ledger created by the previous schema
@@ -155,6 +157,13 @@ names in the table (bank text could otherwise carry terminal escapes).
 - `scripts/ledger-api.test.mjs`: `PUT` with bad marks → 400; shell injection
   with `$'` in a description stays inert.
 - `scripts/omakei-subscriptions.test.mjs`: CLI reads read-only, prints JSON.
+
+## Tuned on real data
+
+Run against a private copy of the owner's ledger (1,392 rows, 3 years) before
+merge. Two rules came from it: a wandering water bill was flagged as a price
+rise (now a rise needs a price that held), and a salon visited about monthly
+read as a variable bill (now variable amounts need a bill category).
 
 ## Open Questions
 

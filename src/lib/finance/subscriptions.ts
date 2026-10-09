@@ -78,6 +78,12 @@ export interface SubscriptionResult {
 /** Everyday buying, not bills: a weekly grocery run is not a subscription. */
 const NOT_BILLS = new Set(["groceries", "dining", "coffee"]);
 
+/**
+ * Where an amount that moves every month is still one bill. A salon visited
+ * about monthly is regular too, but it is not a bill; an electric bill is.
+ */
+const VARIABLE_BILLS = new Set(["utilities", "insurance", "housing", "debt", "childcare"]);
+
 const CADENCES: Array<{
   cadence: Cadence;
   min: number;
@@ -99,6 +105,9 @@ const BAND_SPREAD = 0.03;
 const BAND_SPREAD_FLOOR = 0.5;
 const PRICE_UP_PCT = 0.05;
 const PRICE_UP_FLOOR = 0.5;
+const STEADY_PCT = 0.005;
+const STEADY_FLOOR = 0.1;
+const PRICE_UP_WINDOW = 3;
 const NEW_DAYS = 90;
 
 /* ------------------------------------------------------------ merchant key */
@@ -165,7 +174,7 @@ function closeEnough(a: number, b: number): boolean {
 
 /* -------------------------------------------------------------- detection */
 
-type Charge = { date: string; amount: number; description: string };
+type Charge = { date: string; amount: number; description: string; categoryId: string | null };
 
 function isCandidate(tx: Transaction): boolean {
   if (!tx || typeof tx.date !== "string" || typeof tx.description !== "string") return false;
@@ -174,6 +183,30 @@ function isCandidate(tx: Transaction): boolean {
   if (tx.categoryId && NOT_BILLS.has(tx.categoryId)) return false;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(tx.date)) return false;
   return true;
+}
+
+/**
+ * A price rise is a step from one price that held to a higher one: the charges
+ * before the step agree with each other (at least two of them, within 0.5% or
+ * $0.10), and the step is at least 5% and $0.50. A water bill that wanders by a
+ * few dollars has no "old price", so it is never flagged. Once the new price
+ * has been charged more than three times it is just the price.
+ */
+function priceRise(amounts: number[]): SubscriptionFlag | null {
+  const same = (a: number, b: number) => Math.abs(a - b) <= Math.max(STEADY_PCT * b, STEADY_FLOOR);
+  const now = amounts[amounts.length - 1]!;
+  let step = amounts.length - 1;
+  while (step > 0 && same(amounts[step - 1]!, now)) step--;
+  if (step === 0 || amounts.length - step > PRICE_UP_WINDOW) return null;
+  const was = amounts[step - 1]!;
+  let from = step - 1;
+  while (from > 0 && step - from < 6 && same(amounts[from - 1]!, was)) from--;
+  const prior = amounts.slice(from, step);
+  if (prior.length < 2) return null;
+  const before = median(prior);
+  const rise = now - before;
+  if (rise < before * PRICE_UP_PCT || rise < PRICE_UP_FLOOR) return null;
+  return { kind: "price-up", ref: String(Math.round(now * 100)), from: round2(before) };
 }
 
 /** A recurring series, or null when these charges do not repeat on a schedule. */
@@ -190,33 +223,30 @@ function seriesOf(key: string, charges: Charge[], asOfDay: number): Subscription
   if (regular / gaps.length < REGULAR_SHARE) return null;
 
   const amounts = sorted.map((c) => c.amount);
+  const lastCharge = sorted[sorted.length - 1]!;
   let steady = 0;
   for (let i = 1; i < amounts.length; i++) if (closeEnough(amounts[i]!, amounts[i - 1]!)) steady++;
   const variable = steady / (amounts.length - 1) < REGULAR_SHARE;
-  if (variable && (band.cadence !== "monthly" || sorted.length < VARIABLE_MIN_COUNT)) return null;
+  if (variable) {
+    if (band.cadence !== "monthly" || sorted.length < VARIABLE_MIN_COUNT) return null;
+    if (!VARIABLE_BILLS.has(lastCharge.categoryId ?? "")) return null;
+  }
 
-  const last = sorted[sorted.length - 1]!;
-  const lastDay = dayNumber(last.date);
+  const lastDay = dayNumber(lastCharge.date);
   const idle = asOfDay - lastDay;
   // Long gone: history, not something to act on.
   if (idle > band.days * 3) return null;
 
   const typical = round2(median(amounts.slice(-3)));
   const flags: SubscriptionFlag[] = [];
-  if (!variable && amounts.length >= 2) {
-    const before = median(amounts.slice(-7, -1));
-    if (last.amount >= before * (1 + PRICE_UP_PCT) && last.amount - before >= PRICE_UP_FLOOR) {
-      flags.push({
-        kind: "price-up",
-        ref: String(Math.round(last.amount * 100)),
-        from: round2(before),
-      });
-    }
+  if (!variable) {
+    const flag = priceRise(amounts);
+    if (flag) flags.push(flag);
   }
   const firstDate = sorted[0]!.date;
   if (asOfDay - dayNumber(firstDate) <= NEW_DAYS) flags.push({ kind: "new", ref: firstDate });
   const stopped = idle > band.days * 1.5 + 3;
-  if (stopped) flags.push({ kind: "stopped", ref: last.date });
+  if (stopped) flags.push({ kind: "stopped", ref: lastCharge.date });
 
   const monthly =
     band.cadence === "weekly"
@@ -226,14 +256,14 @@ function seriesOf(key: string, charges: Charge[], asOfDay: number): Subscription
         : typical;
   return {
     key,
-    merchant: extractMerchant(last.description) || key,
+    merchant: extractMerchant(lastCharge.description) || key,
     cadence: band.cadence,
     typical,
     variable,
-    last: round2(last.amount),
+    last: round2(lastCharge.amount),
     firstDate,
-    lastDate: last.date,
-    nextDate: nextDateAfter(last.date, band.cadence),
+    lastDate: lastCharge.date,
+    nextDate: nextDateAfter(lastCharge.date, band.cadence),
     monthly: round2(monthly),
     count: sorted.length,
     stopped,
@@ -279,7 +309,12 @@ export function findSubscriptions(
     }
     if (!key) continue;
     const list = groups.get(key) ?? [];
-    list.push({ date: tx.date, amount: Math.abs(tx.amount), description: tx.description });
+    list.push({
+      date: tx.date,
+      amount: Math.abs(tx.amount),
+      description: tx.description,
+      categoryId: tx.categoryId ?? null,
+    });
     groups.set(key, list);
   }
 
