@@ -4,7 +4,7 @@ This month’s leftover on the [Omarchy](https://omarchy.org/) bar: spend, incom
 
 ![The Omakei editor, showing a month of invented statements](preview.png)
 
-You start with a folder of bank, credit, or mortgage exports. Omakei builds a ledger from that folder. Nothing is uploaded. The files never leave this computer.
+You start with a folder of bank, credit, or mortgage exports. Omakei builds a ledger from that folder on this computer. Omakei uploads nothing and makes no requests to other hosts. The dashboard's fonts ship with the plugin. If you point an agent at the ledger, the agent's service sees what the agent reads.
 
 The pill is the part you see every day. The ledger underneath it is a plain file you can ask questions of — see [Asking your own questions](#asking-your-own-questions).
 
