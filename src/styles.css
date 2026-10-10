@@ -8,6 +8,7 @@
 @source "../scripts/page-shell.mjs";
 @import "tw-animate-css";
 @import "./theme-defaults.css";
+@import "./fonts/fonts.css";
 
 @layer base {
   * {
