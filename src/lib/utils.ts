@@ -1,5 +1,9 @@
 import { twMerge } from "tailwind-merge";
 
+// Date helpers live in `dates.ts`, which imports nothing, so the scripts can
+// share them without `node_modules`. Re-exported so existing imports keep working.
+export { formatDay, formatMonthLabel, monthKey, shiftMonth, todayIso } from "./dates.ts";
+
 export function cn(
   ...inputs: Array<string | undefined | null | false | Record<string, boolean>>
 ) {
@@ -33,43 +37,6 @@ export function formatMoney(
   }
   if (n < -0.0001 && !opts?.abs) return `−${formatted}`;
   return formatted;
-}
-
-export function monthKey(dateIso: string): string {
-  return dateIso.slice(0, 7);
-}
-
-/** Today as "YYYY-MM-DD", in the user's own timezone rather than UTC. */
-export function todayIso(): string {
-  const now = new Date();
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const dd = String(now.getDate()).padStart(2, "0");
-  return `${now.getFullYear()}-${mm}-${dd}`;
-}
-
-export function formatMonthLabel(key: string): string {
-  const [y, m] = key.split("-").map(Number);
-  if (!y || !m) return key;
-  return new Date(y, m - 1, 1).toLocaleString("en-US", {
-    month: "long",
-    year: "numeric",
-  });
-}
-
-export function shiftMonth(key: string, delta: number): string {
-  const [y, m] = key.split("-").map(Number);
-  const d = new Date(y, m - 1 + delta, 1);
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${d.getFullYear()}-${mm}`;
-}
-
-export function formatDay(iso: string): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  if (!y || !m || !d) return iso;
-  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
 }
 
 export function downloadTextFile(filename: string, text: string, mime: string) {
