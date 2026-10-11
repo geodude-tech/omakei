@@ -7,12 +7,17 @@ Traces to `docs/intent/omakei.md`; the privacy rules in
 
 ## Objective
 
-Find the charges that repeat — streaming, phone, gym, insurance, the yearly
-domain renewal — from transactions already in the ledger, on this machine, and
-say three things about them that a list of transactions never does: what they
-cost a month, which went up, and which are new or seem to have stopped. A car
-loan, insurance, and a phone bill recur, but they are not subscriptions, so
-subscriptions and bills are listed and totalled apart.
+Find the charges that repeat — streaming, phone, gym, insurance, the mortgage,
+the yearly domain renewal — from transactions already in the ledger, on this
+machine, and say three things about them that a list of transactions never
+does: what they cost a month, which went up, and which are new or seem to have
+stopped.
+
+"Recurring" is the whole set. Subscriptions are the part of it the user wants:
+plans they chose and could drop. Every other recurring charge (a mortgage, a
+car loan, insurance, a phone, utilities, child care) is a bill, something they
+need. The two are listed and subtotalled apart, under one total for everything
+recurring.
 
 **Not in scope:** cancelling anything, reminders or notifications, a network
 lookup of merchant names, ML, income detection, a bar-widget line (see Open
@@ -22,10 +27,13 @@ Questions).
 
 - `findSubscriptions(transactions, options)` is pure: same input, same output,
   no clock, no I/O. Every rule below has a unit test.
-- The editor shows a "Recurring charges" card with merchant, cadence, typical
-  amount, last and next date, monthly cost, and flags, in a Subscriptions
-  section and a Bills section, each with its monthly subtotal.
-- "Not a subscription" and "dismiss this flag" persist in the ledger and
+- The editor shows a "Recurring" card with the monthly total of everything
+  recurring, then merchant, cadence, typical amount, last and next date,
+  monthly cost, and flags, in a "Subscriptions (wants)" section and a "Bills
+  (needs)" section, each with its monthly subtotal.
+- Every loan account with a payment in the last 13 months is listed, however
+  its bank line reads and however late its feed is.
+- "Not recurring" and "dismiss this flag" persist in the ledger and
   survive a reload, a conflict merge, and a write by `omakei-categorize.mjs`.
 - An existing ledger opens and saves with no migration step and no version bump.
 
@@ -36,7 +44,8 @@ Pure function in `src/lib/finance/subscriptions.ts`.
 1. **Candidates.** Money out (`amount < 0`) that is not a transfer, not a
    check (`isGenericMerchant`), not ATM cash, and not in a category that is
    everyday buying rather than a bill: `groceries`, `dining`, `coffee`.
-2. **Merchant key.** `subscriptionKey(description)`: if the line holds a web
+2. **Merchant key.** A charge on a loan account (step 10) is keyed on its
+   account, not its line. Any other charge: `subscriptionKey(description)`: if the line holds a web
    domain (`.com`, `.co`, `.net`, `.org`, `.io`, `.tv`, `.app`, or anything
    after `www.`, so a cut-off `WWW.ZORPY.COMPA` counts), the key is the
    domain's name: `ZFX*ZORPFLIXPLUS zorpflix.com/billCA` and `ZORPFLIX` are both
@@ -72,11 +81,22 @@ Pure function in `src/lib/finance/subscriptions.ts`.
    band or inside twice the band (52–70 days for monthly), so one missed charge
    does not break a series. A store visited "about monthly" still fails: its
    gaps wander outside both.
+   - **Billed categories.** The newest categorized charge (step 9) in
+     `utilities`, `insurance`, `debt`, `childcare`, or `fees` is a bill a
+     payee sends, and one can be paid a period late. In a short series that
+     one late gap moves the median out of every band (gaps 60 and 32 have
+     median 46), so such a series also takes the band when at least one gap is
+     one period and at most one other gap is not. The count minimum stays. The
+     same pattern in any other category, or none, is not a series.
+     `housing` is a bill (step 9) but not billed: users file home-store
+     receipts under it too, so a housing series gets neither this rule nor
+     variable amounts (step 4).
 4. **Amount.** Fixed if at least 75% of consecutive charges differ by no more
    than 15% (or $2) — so one price rise still reads as fixed. Otherwise
-   variable — allowed only for a monthly series of kind `bill` (step 9) with
-   at least 4 charges. An electric bill passes; a salon visited about monthly
-   does not. Typical amount = the median of the last three charges, except
+   variable — allowed only for a monthly series in a billed category (step 3)
+   with at least 4 charges. An electric bill passes; a salon visited about
+   monthly does not, and neither do hardware-store receipts filed under
+   `housing`. Typical amount = the median of the last three charges, except
    after a price rise (see Flags): then it is the latest charge, the new price.
    The median keeps one odd charge from moving a bill's typical amount; a
    price rise is not an odd charge, it is what the next charge will be.
@@ -108,7 +128,9 @@ Pure function in `src/lib/finance/subscriptions.ts`.
    transactions. No transaction is in two rows.
 8. **As of.** The comparison date is the latest transaction date in the ledger,
    capped at `today`. Statements imported three weeks ago must not make
-   everything look stopped.
+   everything look stopped. A loan account's own data can end long before the
+   ledger's (step 10): its rows are judged stopped against the account's latest
+   transaction, not the ledger's.
 9. **Kind.** Each row is a `subscription`, a `bill`, or `other`, from the
    category of its newest charge that has one:
 
@@ -127,10 +149,35 @@ Pure function in `src/lib/finance/subscriptions.ts`.
    row with no categorized charge at all is `other`, not `bill`: nobody said
    it is a bill, and an unfiled gym or app plan is as likely a subscription.
    To move a row, re-file its latest charge.
-10. **Totals.** `totals` holds one monthly total per kind: the sum of
+10. **Loan accounts.** An account whose `accountKind` is a loan (today only
+    `mortgage`; `AccountKind` has no other loan kind) holds one debt, so every
+    payment out of it is the same bill. Servicers rename that payment often
+    (an online transfer line, then a by-post line, then the lender's name), and a
+    description key splits it into series too short to find. So a loan
+    account's candidates (step 1: money out, not filed under `transfers`, so
+    an escrow payout is never a payment) are keyed on the account:
+    `account:<accountKind>:<accountName, lower-cased>`. They are split into
+    amount bands (step 5, without the one-price check), and every band is a
+    row with `kind: "bill"`, `confidence: "account"`, and the account name as
+    its merchant. A band has a cadence once it has at least 2 charges on one
+    (step 3, with the billed-category rule for one missed period), else
+    cadence `unknown`, like a tagged row. When an account has more than one
+    band, each row's key is `<account key>|<typical dollars>`. A loan row is
+    listed, like a tagged one, until its last payment is more than 13 months
+    old. So every loan account with a payment in the last 13 months appears
+    once per payment band.
+    - **Stale account.** A lender is often not in the bank feed, so the
+      account's statements are imported by hand and end months before the
+      rest of the ledger. Nothing then says the payments stopped, only that
+      there is no data. A loan row is stopped only when its account's latest
+      transaction (capped at as-of) is more than 1.5 periods + 3 days past
+      its last payment. When it is not stopped but the ledger's as-of is that
+      far past, it is flagged `stale-account` with the account's latest date
+      as `ref`, keeps its next date, and stays in the total.
+11. **Totals.** `totals` holds one monthly total per kind: the sum of
     `monthly` over the listed rows of that kind that have a cadence and have
-    not stopped. Hidden rows are in no total. There is no combined total: a
-    subscription total that includes the rent answers no question.
+    not stopped. `total` is their sum: everything recurring, a month. Hidden
+    rows are in no total.
 
 ### Flags
 
@@ -141,14 +188,16 @@ later one shows again.
 |---|---|---|
 | `price-up` | fixed amount; a step up of at least 5% and $0.50 from a price that held (2+ charges within 0.5% or $0.10 of each other), seen in the last 3 charges. The row's `typical` and `monthly` are the new price, even after the flag is dismissed | new amount in cents |
 | `new` | first charge within 90 days of as-of | first date |
-| `stopped` | as-of is more than 1.5 periods + 3 days past the last charge | last date |
+| `stopped` | as-of (for a loan row, its account's latest transaction) is more than 1.5 periods + 3 days past the last charge | last date |
+| `stale-account` | a loan row that is not stopped, but the ledger's as-of is that far past its last payment: the account's data ends early | the account's latest date |
 
 A series stopped for more than three periods (weekly 21 days, monthly 3
 months, yearly 3 years) is history and is not listed at all, unless it holds a
 tagged charge: then it is listed, as stopped, until its last charge is more
 than 13 months (396 days) old or three periods, whichever is longer. So every
 merchant with a `subscriptions` charge in the last 13 months is in the result,
-in `subscriptions` or, if marked "not a subscription", in `hidden`.
+in `subscriptions` or, if marked "not recurring", in `hidden`. The same holds
+for every loan account with a payment in the last 13 months.
 
 ## Data model
 
@@ -161,7 +210,7 @@ replaces the tables it knows).
 CREATE TABLE IF NOT EXISTS subscriptionMarks (
   seq       INTEGER PRIMARY KEY,
   key       TEXT NOT NULL,   -- subscriptionKey (or band key)
-  kind      TEXT NOT NULL,   -- 'not-subscription' | 'price-up' | 'new' | 'stopped'
+  kind      TEXT NOT NULL,   -- 'not-subscription' | 'price-up' | 'new' | 'stopped' | 'stale-account'
   ref       TEXT NOT NULL,   -- '' for not-subscription, else the flag's ref
   createdAt INTEGER
 );
@@ -184,16 +233,21 @@ Snapshot gains `subscriptionMarks: SubscriptionMark[]`. Rules:
 panel: panels are read-only and this card writes marks). Placed under the panel
 grid; hidden when nothing is found.
 
-- Header: "Recurring charges", "Found in your own transactions, on this
-  device."
-- One section per kind with rows, in the order Subscriptions, Bills, Other
-  recurring. Each has a heading and "About $X a month across N" (that kind's
+- Header: "Recurring", "About $X a month across N. Found in your own
+  transactions, on this device." (`total` and every active row with a cadence).
+- One section per kind with rows, in the order "Subscriptions (wants)",
+  "Bills (needs)", "Other" (rows nobody filed under a subscription or bill
+  category). Each has a heading and "About $X a month across N" (that kind's
   total and its active rows with a cadence), then ", plus N with no schedule
   yet, not in the total" when it has rows with cadence `unknown`.
-- One row per subscription: merchant (the name most of its lines carry),
-  `monthly · $12.99` (with "from your Subscriptions tag" for a tagged one), last and next date,
-  `≈ $/mo` ("No schedule yet" and "Not in total" for cadence `unknown`), flags as chips ("Up from $10.99", "New", "Seems to have stopped")
-  each with a dismiss button, and a "Not a subscription" button.
+- One row per recurring charge: merchant (the name most of its lines carry,
+  or the account name for a loan), `monthly · $12.99` (with "from your
+  Subscriptions tag" for a tagged one, "loan account" for a loan), last and
+  next date, `≈ $/mo` ("No schedule yet" and "Not in total" for cadence
+  `unknown`), flags as chips ("Up from $10.99", "New", "Seems to have
+  stopped", "No data for this account since Jun 17") each with a dismiss
+  button, and a "Not recurring" button (stored as the `not-subscription`
+  mark).
 - "N hidden" toggles a list of hidden ones, each with "Restore".
 - Merchant text is rendered as React text only — never `innerHTML`.
 
@@ -210,15 +264,16 @@ merchant or amount in argv or env. Merchant strings reach the page through
 ## Terminal
 
 `node scripts/omakei-subscriptions.mjs [--json] [ledger-path]` prints the same
-list. Read-only open, stdout only, `tagged` shown beside the flags of a tagged
-series, control characters stripped from merchant
-names in the table (bank text could otherwise carry terminal escapes). Rows
-are printed in one section per kind that has any (`Subscriptions`, `Bills`,
-`Other recurring`), each ending in `<Heading>: about $X a month across N.`
-Inside a section, rows with cadence `unknown` follow under "Tagged, no
-schedule yet (not in the monthly total)". A last line counts active, stopped,
-unscheduled, and hidden rows. `--json` prints the result as is, so each row
-carries `kind` and the result carries `totals`.
+list. Read-only open, stdout only, `tagged` or `loan account` shown beside the
+flags of a tagged or loan series, control characters stripped from merchant
+names in the table (bank text could otherwise carry terminal escapes). The
+first line is `Recurring: about $X a month across N.` Rows are then printed in
+one section per kind that has any (`Subscriptions (wants)`, `Bills (needs)`,
+`Other`), each ending in `<Heading>: about $X a month across N.` Inside a
+section, rows with cadence `unknown` follow under "No schedule yet (not in the
+monthly total)". A last line counts active, stopped, unscheduled, and hidden
+rows. `--json` prints the result as is, so each row carries `kind` and the
+result carries `totals` and `total`.
 
 ## Test plan
 
@@ -236,7 +291,14 @@ carries `kind` and the result carries `totals`.
   promoted by a second charge on schedule, no transaction in two rows; each
   kind from the newest categorized charge with a total per kind, hidden rows
   in no total, and a price rise moving the monthly cost to the new price while
-  a variable bill keeps its median.
+  a variable bill keeps its median; a mortgage whose bank line keeps changing
+  is one bill keyed on its account; a mortgage feed that ends months early is
+  `stale-account`, not stopped, and still in the total; an escrow
+  payout filed under `transfers` is in no row; hardware-store receipts
+  filed under `housing` are not a bill; every loan account with a payment in
+  the last 13 months appears once per payment band; a utility bill with one
+  missed month in a short series is monthly while the same pattern
+  uncategorized is not.
 - `scripts/ledger-db.test.mjs`: marks round-trip; absent key keeps them; `[]`
   clears; bad kind / long key refused; a ledger created by the previous schema
   (no table) reads as `[]` and gains the table on its first write; the
@@ -247,8 +309,8 @@ carries `kind` and the result carries `totals`.
   with `$'` in a description stays inert.
 - `scripts/omakei-subscriptions.test.mjs`: CLI reads read-only, prints JSON,
   labels a tagged series, lists unscheduled tagged rows apart from the total,
-  prints a section and subtotal per kind, and carries `kind` and `totals` in
-  the JSON.
+  prints the recurring total then a section and subtotal per kind, labels a
+  stale loan account, and carries `kind`, `totals`, and `total` in the JSON.
 
 ## Tuned on real data
 
@@ -278,6 +340,14 @@ loan, insurance, a phone bill, and child care, which the user had filed under
 eight months at one price was costed at the old price, so the total ran low.
 The kind, the per-kind totals, and the new price after a rise came from it.
 
+A fifth run (2026-10) found the mortgage missing. Its payments, filed under
+`housing`, changed bank line several times, so no description key held enough
+of them; and the lender's statements ended months before the rest of the
+ledger, so the longest series read as long stopped and was dropped. The
+same run showed hardware-store receipts filed under `housing` could pass as a
+variable bill. The loan-account key, `stale-account`, and the billed-category
+rule came from it.
+
 ## Open Questions
 
 1. **Bar widget.** A "≈ $X/mo recurring · 1 flagged" line in the popup would
@@ -287,7 +357,11 @@ The kind, the per-kind totals, and the new price after a rise came from it.
 2. **Biweekly and quarterly** cadences are not detected. Add a band row if real
    data shows them. A tagged one is listed anyway, at the pace of its latest
    gap or monthly.
-3. **One tagged charge** has cadence `unknown` until a second charge at its
+3. **Stale feeds on other accounts.** Only loan accounts are judged against
+   their own latest transaction. A card or checking account carries everyday
+   buying, so its feed going quiet already shows. Widen the rule if real data
+   shows a stale card feed reading as stopped.
+4. **One tagged charge** has cadence `unknown` until a second charge at its
    price comes one period later. A plan that bills every six or seven weeks
    stays `unknown`, and out of the total, until a band for it exists. It stays
    listed until it is 13 months old.
