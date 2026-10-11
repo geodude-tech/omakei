@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   findSubscriptions,
-  monthlyTotal,
   nextDateAfter,
   parseSubscriptionMarks,
   subscriptionKey,
@@ -144,7 +143,7 @@ test("one that has not charged for a while is flagged stopped and listed last", 
     ...monthly("2026-01", 9, 5, "ICLOUD STORAGE"),
     ANCHOR,
   ];
-  const { subscriptions } = findSubscriptions(rows, { today: "2026-09-30" });
+  const { subscriptions, totals } = findSubscriptions(rows, { today: "2026-09-30" });
   assert.deepEqual(
     subscriptions.map((s) => s.key),
     ["icloud", "planet"],
@@ -152,7 +151,11 @@ test("one that has not charged for a while is flagged stopped and listed last", 
   const gym = subscriptions[1]!;
   assert.equal(gym.stopped, true);
   assert.deepEqual(gym.flags, [{ kind: "stopped", ref: "2026-07-05" }]);
-  assert.equal(monthlyTotal(subscriptions), 5, "a stopped one is not in the monthly total");
+  assert.deepEqual(
+    totals,
+    { subscription: 0, bill: 0, other: 5 },
+    "a stopped one is not in the total",
+  );
 });
 
 test("one stopped long ago is history and not listed", () => {
@@ -216,6 +219,8 @@ test("a monthly bill that varies is found and marked variable, with no price fla
   const [s] = findSubscriptions(rows, { today: "2026-09-30" }).subscriptions;
   assert.equal(s?.variable, true);
   assert.equal(s?.cadence, "monthly");
+  assert.equal(s?.typical, 175.2, "a bill that varies costs the median of its last three");
+  assert.equal(s?.kind, "bill");
   assert.deepEqual(s?.flags, []);
 });
 
@@ -355,7 +360,12 @@ test("a dismissed price rise comes back when the price rises again", () => {
 });
 
 test("an empty ledger finds nothing", () => {
-  assert.deepEqual(findSubscriptions([]), { subscriptions: [], hidden: [], asOf: "" });
+  assert.deepEqual(findSubscriptions([]), {
+    subscriptions: [],
+    hidden: [],
+    totals: { subscription: 0, bill: 0, other: 0 },
+    asOf: "",
+  });
 });
 
 test("malformed rows are skipped, not thrown on", () => {
@@ -455,7 +465,7 @@ test("a plan billed through a short-link domain is one row under its brand", () 
     tagged("2026-09-11", 3.25, "Q4ZR208T b.co/paysupport#CA"),
     ANCHOR,
   ];
-  const { subscriptions } = findSubscriptions(rows, { today: "2026-09-30" });
+  const { subscriptions, totals } = findSubscriptions(rows, { today: "2026-09-30" });
   assert.deepEqual(subscriptions.map(brief), [
     {
       key: "blorpify",
@@ -470,7 +480,7 @@ test("a plan billed through a short-link domain is one row under its brand", () 
     },
   ]);
   assert.equal(subscriptions[0]!.merchant, "Blorpify");
-  assert.equal(monthlyTotal(subscriptions), 3.25);
+  assert.deepEqual(totals, { subscription: 3.25, bill: 0, other: 0 });
 });
 
 test("a short-link code line shared by two brands stays on its own", () => {
@@ -521,7 +531,7 @@ test("every tagged plan at an app store is listed, however few its charges", () 
     tagged("2026-09-27", 41.1, at(1)),
     tagged("2026-09-26", 8.4, at(2)),
   ];
-  const { subscriptions } = findSubscriptions(rows, { today: "2026-09-30" });
+  const { subscriptions, totals } = findSubscriptions(rows, { today: "2026-09-30" });
   assert.deepEqual(subscriptions.map(brief), [
     {
       key: "zapp|41",
@@ -568,7 +578,11 @@ test("every tagged plan at an app store is listed, however few its charges", () 
       monthly: 1.49,
     },
   ]);
-  assert.equal(monthlyTotal(subscriptions), 47.3, "the unscheduled charges are not in the total");
+  assert.deepEqual(
+    totals,
+    { subscription: 47.3, bill: 0, other: 0 },
+    "the unscheduled charges are not in the total",
+  );
 });
 
 test("a tagged rental with two charges and an add-on lists both prices", () => {
@@ -704,13 +718,13 @@ test("a per-charge order code after '*' does not split one plan", () => {
     {
       key: "zorbtime",
       cadence: "monthly",
-      typical: 4.2,
+      typical: 5.6,
       count: 9,
       firstDate: "2025-12-25",
       lastDate: "2026-09-25",
       stopped: false,
       confidence: "schedule",
-      monthly: 4.2,
+      monthly: 5.6,
     },
   ]);
   assert.equal(subscriptions[0]!.merchant, "ZORBTIME");
@@ -730,7 +744,7 @@ test("tagged charges with no schedule yet are listed but not counted as a monthl
     tagged("2026-09-20", 0.95, "Zorpaudio zorpaudio.co/pay CA"),
     ANCHOR,
   ];
-  const { subscriptions } = findSubscriptions(rows, { today: "2026-09-30" });
+  const { subscriptions, totals } = findSubscriptions(rows, { today: "2026-09-30" });
   assert.deepEqual(subscriptions.map(brief), [
     {
       key: "netflix",
@@ -757,7 +771,7 @@ test("tagged charges with no schedule yet are listed but not counted as a monthl
   ]);
   assert.equal(subscriptions[1]!.nextDate, null);
   assert.deepEqual(subscriptions[1]!.flags, [{ kind: "new", ref: "2026-08-14" }]);
-  assert.equal(monthlyTotal(subscriptions), 15.49);
+  assert.deepEqual(totals, { subscription: 0, bill: 0, other: 15.49 });
 });
 
 test("a second tagged charge at that price on schedule gives it a cadence", () => {
@@ -767,7 +781,7 @@ test("a second tagged charge at that price on schedule gives it a cadence", () =
     tagged("2026-09-20", 0.95, "Zorpaudio zorpaudio.co/pay CA"),
     ANCHOR,
   ];
-  const { subscriptions } = findSubscriptions(rows, { today: "2026-09-30" });
+  const { subscriptions, totals } = findSubscriptions(rows, { today: "2026-09-30" });
   assert.deepEqual(
     subscriptions.map((s) => [s.key, s.cadence, s.count, s.monthly]),
     [
@@ -775,7 +789,7 @@ test("a second tagged charge at that price on schedule gives it a cadence", () =
       ["zorpaudio|unknown", "unknown", 1, null],
     ],
   );
-  assert.equal(monthlyTotal(subscriptions), 0.95);
+  assert.deepEqual(totals, { subscription: 0.95, bill: 0, other: 0 });
 });
 
 test("a domain cut short by the bank still names the merchant", () => {
@@ -812,4 +826,78 @@ test("no transaction is placed in two rows", () => {
   const placed = subscriptions.flatMap((s) => s.ids);
   assert.equal(placed.length, 35);
   assert.equal(new Set(placed).size, 35);
+});
+
+test("after a price rise the monthly cost is the new price, not the median", () => {
+  const was = [6.46, 6.47, 6.46, 6.47, 6.46, 6.47, 6.46, 6.47];
+  const rows = [
+    ...monthly("2026-01", 9, [...was, 8.63], "ZORPNOTES").map((t) => ({
+      ...t,
+      categoryId: TAG,
+    })),
+    ANCHOR,
+  ];
+  const { subscriptions, totals } = findSubscriptions(rows, { today: "2026-09-30" });
+  assert.deepEqual(
+    subscriptions.map((s) => [s.key, s.typical, s.monthly, s.last, s.flags]),
+    [["zorpnotes", 8.63, 8.63, 8.63, [{ kind: "price-up", ref: "863", from: 6.47 }]]],
+  );
+  assert.deepEqual(totals, { subscription: 8.63, bill: 0, other: 0 });
+});
+
+test("each row is a subscription, a bill, or other, by the category of its latest categorized charge", () => {
+  const filed = (rows: Transaction[], ...categories: (string | null)[]) =>
+    rows.map((t, i) => ({ ...t, categoryId: categories[Math.min(i, categories.length - 1)]! }));
+  const nine = (amount: number, description: string) => monthly("2026-01", 9, amount, description);
+  const rows = [
+    ...filed(nine(12.5, "ZORPFLIX"), TAG),
+    ...filed(nine(2.99, "ZORPCLOUD"), TAG, TAG, TAG, TAG, TAG, TAG, TAG, TAG, null),
+    ...filed(nine(45, "ZORPTEL"), TAG, TAG, TAG, TAG, TAG, TAG, "utilities"),
+    ...filed(nine(310, "ZORPLOAN"), "debt"),
+    ...filed(nine(96, "ZORPSURE"), "insurance"),
+    ...filed(nine(820, "ZORPKIDS"), "childcare"),
+    ...filed(nine(12, "ZORPBANK"), "fees"),
+    ...nine(30, "ZORPGYM"),
+    ...filed(nine(18, "ZORPMAG"), "entertainment"),
+    ANCHOR,
+  ];
+  const { subscriptions, totals } = findSubscriptions(rows, { today: "2026-09-30" });
+  assert.deepEqual(
+    subscriptions.map((s) => [s.key, s.kind, s.monthly]),
+    [
+      ["zorpkids", "bill", 820],
+      ["zorploan", "bill", 310],
+      ["zorpsure", "bill", 96],
+      ["zorptel", "bill", 45],
+      ["zorpgym", "other", 30],
+      ["zorpmag", "other", 18],
+      ["zorpflix", "subscription", 12.5],
+      ["zorpbank", "bill", 12],
+      ["zorpcloud", "subscription", 2.99],
+    ],
+  );
+  assert.deepEqual(totals, { subscription: 15.49, bill: 1283, other: 48 });
+});
+
+test("hidden rows keep their kind and stay out of the totals", () => {
+  const rows = [
+    ...monthly("2026-01", 9, 310, "ZORPLOAN").map((t) => ({ ...t, categoryId: "debt" })),
+    ...monthly("2026-01", 9, 12.5, "ZORPFLIX").map((t) => ({ ...t, categoryId: TAG })),
+    ANCHOR,
+  ];
+  const marks: SubscriptionMark[] = [
+    { key: "zorploan", kind: "not-subscription", ref: "", createdAt: 1 },
+  ];
+  const { subscriptions, hidden, totals } = findSubscriptions(rows, {
+    today: "2026-09-30",
+    marks,
+  });
+  assert.deepEqual(
+    [...subscriptions, ...hidden].map((s) => [s.key, s.kind]),
+    [
+      ["zorpflix", "subscription"],
+      ["zorploan", "bill"],
+    ],
+  );
+  assert.deepEqual(totals, { subscription: 12.5, bill: 0, other: 0 });
 });
