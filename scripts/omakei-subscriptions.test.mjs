@@ -125,10 +125,32 @@ test("terminal escape sequences in a merchant name are not printed", async () =>
 
 test("a charge the user tagged as a subscription is listed and labelled tagged", async () => {
   const dir = privateDir();
-  const transactions = [charge("z1", "2026-09-19", "ZORPWEAR RENTAL", -17.35, "subscriptions")];
+  const transactions = [
+    charge("z1", "2026-08-21", "ZORPWEAR RENTAL", -88.2, "subscriptions"),
+    charge("z2", "2026-09-19", "ZORPWEAR RENTAL", -88.2, "subscriptions"),
+  ];
   await updateLedgerDb(dir, () => ({ version: 1, transactions, rules: [] }));
   assert.match(
     cli([dir]),
-    /^ZORPWEAR\s+monthly\s+\$17\.35\s+\$17\.35\/mo {2}last 2026-09-19 {2}next 2026-10-19 {2}\[tagged, new\]$/m,
+    /^ZORPWEAR\s+monthly\s+\$88\.20\s+\$88\.20\/mo {2}last 2026-09-19 {2}next 2026-10-19 {2}\[tagged, new\]$/m,
+  );
+});
+
+test("tagged charges with no schedule yet are listed apart and left out of the monthly total", async () => {
+  const dir = privateDir();
+  const transactions = [
+    ...ledger().transactions,
+    charge("a1", "2026-08-14", "Zorpaudio zorpaudio.co/pay CA", -18.4, "subscriptions"),
+    charge("a2", "2026-09-02", "Zorpaudio zorpaudio.co/pay CA", -7.8, "subscriptions"),
+  ];
+  await updateLedgerDb(dir, () => ({ version: 1, transactions, rules: [] }));
+  const text = cli([dir]);
+  assert.match(
+    text,
+    /^Tagged, no schedule yet \(not in the monthly total\):\nZorpaudio\s+\$13\.10 {2}2 charges {2}last 2026-09-02 {2}\[new\]$/m,
+  );
+  assert.match(
+    text,
+    /2 active, 0 stopped, 1 tagged with no schedule yet, 0 marked not a subscription; about \$40\.48 a month/,
   );
 });

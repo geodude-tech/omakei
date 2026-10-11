@@ -76,11 +76,7 @@ test("extractMerchant grouping key — corpus", () => {
       "AMZN MKTP",
       "WRONG: splits from AMAZON.COM below — two keys for one merchant",
     ],
-    [
-      "AMAZON.COM*RT4G12 AMZN.COM/BILL WA",
-      "AMAZON.COM*RT4G12",
-      "WRONG: keeps the per-transaction code; rule matches exactly one row",
-    ],
+    ["AMAZON.COM*RT4G12 AMZN.COM/BILL WA", "AMAZON.COM"],
     [
       "DEBIT CARD PURCHASE TARGET T-1234 CHICAGO IL",
       "PURCHASE",
@@ -105,6 +101,9 @@ test("extractMerchant strips card prefixes, cities, and groups chains", () => {
   assert.equal(extractMerchant("76 - DALLAS RD 76 DALLAS TX"), "76");
   assert.equal(extractMerchant("SAFEWAY #5678 PORTLAND OR"), "SAFEWAY");
   assert.equal(extractMerchant("MED*REGIONAL MEDICAL Seattle WA"), "REGIONAL");
+  assert.equal(extractMerchant("ZORBTIME*4QJ7X2M9P"), "ZORBTIME");
+  assert.equal(extractMerchant("ZORBTIME*R8T3W6Z1K 800-555-0142 WA"), "ZORBTIME");
+  assert.equal(extractMerchant("ZORP4KIDS*K2P9Q7R1A"), "ZORP4KIDS");
   assert.notEqual(
     extractMerchant("MED*REGIONAL MEDICAL Seattle WA"),
     extractMerchant("ACME CORP PAYROLL       ACH"),
