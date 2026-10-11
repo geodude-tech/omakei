@@ -7,8 +7,9 @@
  * The rules and thresholds are `docs/spec/subscriptions.md`.
  */
 import { extractMerchant, isGenericMerchant, REFERENCE_CODES, spacedForm } from "./fingerprint.ts";
+import { statementAccount } from "./statements.ts";
 import { isTransferTx } from "./transfers.ts";
-import type { Transaction } from "./types.ts";
+import type { AccountKind, Transaction } from "./types.ts";
 
 export type Cadence = "weekly" | "monthly" | "yearly";
 
@@ -16,23 +17,31 @@ export type Cadence = "weekly" | "monthly" | "yearly";
  * Why a series is listed. "schedule": its charges repeat on a schedule.
  * "tagged": the user filed its charges under Subscriptions, and there are too
  * few of them, or they are too irregular, for the schedule rules.
+ * "account": they are payments on a loan account, which are bills however
+ * their bank line reads.
  */
-export type Confidence = "schedule" | "tagged";
+export type Confidence = "schedule" | "tagged" | "account";
 
 /**
  * What a recurring charge is to the user, read off the category they filed it
- * under: a plan they chose, a bill they owe, or neither said.
+ * under: a plan they want (a subscription), a bill they need, or neither said.
  */
 export type SubscriptionKind = "subscription" | "bill" | "other";
 
 /** The order the kinds are shown in. */
 export const SUBSCRIPTION_KINDS: readonly SubscriptionKind[] = ["subscription", "bill", "other"];
 
-export type FlagKind = "price-up" | "new" | "stopped";
+export type FlagKind = "price-up" | "new" | "stopped" | "stale-account";
 
 export type MarkKind = "not-subscription" | FlagKind;
 
-export const MARK_KINDS: readonly MarkKind[] = ["not-subscription", "price-up", "new", "stopped"];
+export const MARK_KINDS: readonly MarkKind[] = [
+  "not-subscription",
+  "price-up",
+  "new",
+  "stopped",
+  "stale-account",
+];
 
 /** Limits on stored marks; `ledger-db.mjs` enforces the same ones on write. */
 export const MAX_MARK_KEY = 200;
@@ -52,7 +61,7 @@ export interface SubscriptionFlag {
   kind: FlagKind;
   /** Identifies this occurrence, so dismissing it does not hide the next one. */
   ref: string;
-  /** For price-up: what it used to cost. */
+  /** For price-up: what it used to cost. For stale-account, `ref` is the account's last date. */
   from?: number;
 }
 
@@ -103,6 +112,8 @@ export interface SubscriptionResult {
   hidden: Subscription[];
   /** Monthly cost of each kind's listed rows that have a cadence and have not stopped. */
   totals: Record<SubscriptionKind, number>;
+  /** The sum of `totals`: everything recurring, a month. */
+  total: number;
   /** The date "new" and "stopped" were judged against. */
   asOf: string;
 }
@@ -112,6 +123,9 @@ const NOT_BILLS = new Set(["groceries", "dining", "coffee"]);
 
 /** The user's own word that a charge is a subscription. */
 const TAGGED = "subscriptions";
+
+/** Accounts that only hold one debt: every payment out of one is the same bill. */
+const LOAN_ACCOUNTS: ReadonlySet<AccountKind> = new Set(["mortgage"]);
 
 /** Categories that say what a charge is. Any other category, or none, is "other". */
 const KIND_OF_CATEGORY = new Map<string, SubscriptionKind>([
@@ -123,6 +137,13 @@ const KIND_OF_CATEGORY = new Map<string, SubscriptionKind>([
   ["childcare", "bill"],
   ["fees", "bill"],
 ]);
+
+/**
+ * Bills a payee sends: the amount may move, and one may be paid a period late.
+ * Housing is a bill too, but home-store receipts are filed under it as well, so
+ * a housing series must hold one price on a schedule.
+ */
+const BILLED = new Set(["utilities", "insurance", "debt", "childcare", "fees"]);
 
 type Band = { cadence: Cadence; min: number; max: number; days: number; minCount: number };
 
@@ -148,6 +169,7 @@ const STEADY_FLOOR = 0.1;
 const PRICE_UP_WINDOW = 3;
 const NEW_DAYS = 90;
 const TAGGED_HISTORY_DAYS = 396;
+const LOAN_MIN_COUNT = 2;
 
 /* ------------------------------------------------------------ merchant key */
 
@@ -240,6 +262,7 @@ function closeEnough(a: number, b: number): boolean {
 
 type Charge = {
   id: string;
+  account: string;
   date: string;
   amount: number;
   description: string;
@@ -251,12 +274,25 @@ function fits(gap: number, band: Band): boolean {
   return (gap >= band.min && gap <= band.max) || (gap >= 2 * band.min && gap <= 2 * band.max);
 }
 
-function scheduleOf(gaps: number[], count: number): Band | null {
+type Rule = { missable: boolean; minCount?: number };
+
+/**
+ * The band most gaps fit, whose median gap is one period. With `missable`, one
+ * gap of two periods beside gaps of one is also that band: in a short series
+ * that one gap moves the median out of every band.
+ */
+function scheduleOf(gaps: number[], count: number, rule: Rule): Band | null {
   const gap = median(gaps);
-  const band = CADENCES.find((c) => gap >= c.min && gap <= c.max);
-  if (!band || count < band.minCount) return null;
-  const regular = gaps.filter((g) => fits(g, band)).length;
-  return regular / gaps.length < REGULAR_SHARE ? null : band;
+  const once = (g: number, band: Band) => g >= band.min && g <= band.max;
+  return (
+    CADENCES.find((band) => {
+      if (count < (rule.minCount ?? band.minCount)) return false;
+      if (gaps.filter((g) => fits(g, band)).length / gaps.length < REGULAR_SHARE) return false;
+      if (once(gap, band)) return true;
+      const single = gaps.filter((g) => once(g, band)).length;
+      return rule.missable && single > 0 && gaps.length - single <= 1;
+    }) ?? null
+  );
 }
 
 /** A tagged series has a cadence once its latest charge came one period after the one before. */
@@ -323,60 +359,70 @@ function priceRise(amounts: number[]): SubscriptionFlag | null {
   return { kind: "price-up", ref: String(Math.round(now * 100)), from: round2(before) };
 }
 
-/** The kind the user's latest word on these charges gives: the newest charge with a category. */
-function kindOf(sorted: Charge[]): SubscriptionKind {
+/** The user's latest word on these charges: the category of the newest charge that has one. */
+function categoryOf(sorted: Charge[]): string | null {
   for (let i = sorted.length - 1; i >= 0; i--) {
     const category = sorted[i]!.categoryId;
-    if (category) return KIND_OF_CATEGORY.get(category) ?? "other";
+    if (category) return category;
   }
-  return "other";
+  return null;
 }
 
 /**
  * How a series is judged. "schedule": the charges must repeat on one.
- * "tagged": the user has already said they are a subscription, and the latest
- * gap gives the cadence, or "unknown". "unscheduled": tagged charges at
- * different prices that together have no cadence.
+ * "loan": payments on a loan account, listed with a cadence once two of them
+ * repeat on one, else "unknown". "tagged": the user has already said they are
+ * a subscription, and the latest gap gives the cadence, or "unknown".
+ * "unscheduled": tagged charges at different prices that together have no
+ * cadence.
  */
-type Pace = "schedule" | "tagged" | "unscheduled";
+type Pace = "schedule" | "loan" | "tagged" | "unscheduled";
+
+/**
+ * "YYYY-MM-DD" dates a series is judged against. `asOf` is the ledger's; `dataEnd`
+ * is the last date its account has data for, which a lender feed imported
+ * apart from the bank's can leave months behind.
+ */
+type Clock = { asOf: string; dataEnd: string };
 
 /** A recurring series, or null. */
-function seriesOf(
-  key: string,
-  charges: Charge[],
-  asOfDay: number,
-  pace: Pace,
-): Subscription | null {
+function seriesOf(key: string, charges: Charge[], clock: Clock, pace: Pace): Subscription | null {
   const sorted = [...charges].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   if (sorted.length === 0) return null;
   const gaps: number[] = [];
   for (let i = 1; i < sorted.length; i++)
     gaps.push(dayNumber(sorted[i]!.date) - dayNumber(sorted[i - 1]!.date));
+  const category = categoryOf(sorted);
+  const billed = category !== null && BILLED.has(category);
   const band =
     pace === "schedule"
-      ? scheduleOf(gaps, sorted.length)
-      : pace === "tagged"
-        ? taggedPace(gaps)
-        : null;
+      ? scheduleOf(gaps, sorted.length, { missable: billed })
+      : pace === "loan"
+        ? scheduleOf(gaps, sorted.length, { missable: true, minCount: LOAN_MIN_COUNT })
+        : pace === "tagged"
+          ? taggedPace(gaps)
+          : null;
   if (!band && pace === "schedule") return null;
-  const confidence: Confidence = pace === "schedule" ? "schedule" : "tagged";
+  const confidence: Confidence =
+    pace === "schedule" ? "schedule" : pace === "loan" ? "account" : "tagged";
 
   const amounts = sorted.map((c) => c.amount);
   const lastCharge = sorted[sorted.length - 1]!;
   let steady = 0;
   for (let i = 1; i < amounts.length; i++) if (closeEnough(amounts[i]!, amounts[i - 1]!)) steady++;
   const variable = steady / (amounts.length - 1) < REGULAR_SHARE;
-  const kind = kindOf(sorted);
+  const kind: SubscriptionKind =
+    pace === "loan" ? "bill" : (KIND_OF_CATEGORY.get(category ?? "") ?? "other");
   if (variable && band && confidence === "schedule") {
-    if (band.cadence !== "monthly" || sorted.length < VARIABLE_MIN_COUNT) return null;
-    if (kind !== "bill") return null;
+    if (band.cadence !== "monthly" || sorted.length < VARIABLE_MIN_COUNT || !billed) return null;
   }
 
+  const asOfDay = dayNumber(clock.asOf);
   const lastDay = dayNumber(lastCharge.date);
   const idle = asOfDay - lastDay;
   const periods = band ? band.days * 3 : 0;
-  const tagged = sorted.some((c) => c.categoryId === TAGGED);
-  const history = tagged ? Math.max(periods, TAGGED_HISTORY_DAYS) : periods;
+  const kept = pace === "loan" || sorted.some((c) => c.categoryId === TAGGED);
+  const history = kept ? Math.max(periods, TAGGED_HISTORY_DAYS) : periods;
   if (idle > history) return null;
 
   const rise = variable ? null : priceRise(amounts);
@@ -384,12 +430,14 @@ function seriesOf(
   const flags: SubscriptionFlag[] = rise ? [rise] : [];
   const firstDate = sorted[0]!.date;
   if (asOfDay - dayNumber(firstDate) <= NEW_DAYS) flags.push({ kind: "new", ref: firstDate });
-  const stopped = band !== null && idle > band.days * 1.5 + 3;
+  const quiet = band ? band.days * 1.5 + 3 : Infinity;
+  const stopped = dayNumber(clock.dataEnd) - lastDay > quiet;
   if (stopped) flags.push({ kind: "stopped", ref: lastCharge.date });
+  else if (idle > quiet) flags.push({ kind: "stale-account", ref: clock.dataEnd });
 
   const base = {
     key,
-    merchant: nameOf(sorted, key),
+    merchant: (pace === "loan" && lastCharge.account) || nameOf(sorted, key),
     kind,
     confidence,
     typical,
@@ -435,19 +483,30 @@ function bandsOf(charges: Charge[]): Charge[][] {
   return bands;
 }
 
+/** A loan account's payments are one bill whatever their bank lines say, so the account is the key. */
+function loanKey(tx: Transaction): string | null {
+  return LOAN_ACCOUNTS.has(tx.accountKind)
+    ? `account:${tx.accountKind}:${statementAccount(String(tx.accountName ?? "")).toLowerCase()}`
+    : null;
+}
+
 export function findSubscriptions(
   transactions: readonly Transaction[],
   options: SubscriptionOptions = {},
 ): SubscriptionResult {
   let latest = "";
   const candidates: Transaction[] = [];
+  const loanDataEnd = new Map<string, string>();
   // Bank lines repeat; name each distinct one once. Null means not a merchant.
   const lines = new Map<string, LineKey | null>();
   for (const tx of transactions) {
-    if (tx && typeof tx.date === "string" && tx.date > latest) latest = tx.date;
+    if (!tx || typeof tx.date !== "string") continue;
+    if (tx.date > latest) latest = tx.date;
+    const loan = loanKey(tx);
+    if (loan && tx.date > (loanDataEnd.get(loan) ?? "")) loanDataEnd.set(loan, tx.date);
     if (!isCandidate(tx)) continue;
     candidates.push(tx);
-    if (lines.has(tx.description)) continue;
+    if (loan || lines.has(tx.description)) continue;
     const generic =
       /\batm\b/i.test(tx.description) || isGenericMerchant(extractMerchant(tx.description));
     lines.set(tx.description, generic ? null : lineKey(tx.description));
@@ -462,12 +521,13 @@ export function findSubscriptions(
   const groups = new Map<string, Charge[]>();
   for (const tx of candidates) {
     const line = lines.get(tx.description);
-    if (!line?.key) continue;
-    const brands = line.key === line.shortLink ? brandsOf.get(line.key) : undefined;
-    const key = brands?.size === 1 ? [...brands][0]! : line.key;
+    const brands = line && line.key === line.shortLink ? brandsOf.get(line.key) : undefined;
+    const key = loanKey(tx) ?? (brands?.size === 1 ? [...brands][0]! : line?.key);
+    if (!key) continue;
     const list = groups.get(key) ?? [];
     list.push({
       id: tx.id,
+      account: statementAccount(String(tx.accountName ?? "")),
       date: tx.date,
       amount: Math.abs(tx.amount),
       description: tx.description,
@@ -477,12 +537,21 @@ export function findSubscriptions(
   }
 
   const asOf = options.today && options.today < latest ? options.today : latest;
-  if (!asOf) return { subscriptions: [], hidden: [], totals: totalsOf([]), asOf: "" };
-  const asOfDay = dayNumber(asOf);
+  if (!asOf) return { subscriptions: [], hidden: [], totals: totalsOf([]), total: 0, asOf: "" };
+  const clock = { asOf, dataEnd: asOf };
 
   const found: Subscription[] = [];
   for (const [key, charges] of groups) {
-    const whole = seriesOf(key, charges, asOfDay, "schedule");
+    const dataEnd = loanDataEnd.get(key);
+    if (dataEnd) {
+      const loan = { asOf, dataEnd: dataEnd < asOf ? dataEnd : asOf };
+      const rows = bandsOf(charges).flatMap((band) => seriesOf(key, band, loan, "loan") ?? []);
+      for (const sub of rows) {
+        found.push(rows.length > 1 ? { ...sub, key: `${key}|${Math.round(sub.typical)}` } : sub);
+      }
+      continue;
+    }
+    const whole = seriesOf(key, charges, clock, "schedule");
     if (whole) {
       found.push(whole);
       continue;
@@ -497,7 +566,7 @@ export function findSubscriptions(
         band.some((c) => Math.abs(c.amount - mid) > Math.max(BAND_SPREAD * mid, BAND_SPREAD_FLOOR))
       )
         continue;
-      const sub = seriesOf(key, band, asOfDay, "schedule");
+      const sub = seriesOf(key, band, clock, "schedule");
       if (!sub) continue;
       rows.push(sub);
       for (const c of band) covered.add(c);
@@ -505,11 +574,11 @@ export function findSubscriptions(
     const leftover = charges.filter((c) => c.categoryId === TAGGED && !covered.has(c));
     const unscheduled: Charge[] = [];
     for (const band of bandsOf(leftover)) {
-      const sub = seriesOf(key, band, asOfDay, "tagged");
+      const sub = seriesOf(key, band, clock, "tagged");
       if (sub?.cadence === "unknown") unscheduled.push(...band);
       else if (sub) rows.push(sub);
     }
-    const once = seriesOf(key, unscheduled, asOfDay, "unscheduled");
+    const once = seriesOf(key, unscheduled, clock, "unscheduled");
     if (once) rows.push(once);
     for (const sub of rows) {
       const price = sub.cadence === "unknown" ? "unknown" : Math.round(sub.typical);
@@ -532,10 +601,12 @@ export function findSubscriptions(
   const rank = (s: Subscription) => (s.stopped ? 2 : s.monthly === null ? 1 : 0);
   const order = (a: Subscription, b: Subscription) =>
     rank(a) - rank(b) || (b.monthly ?? 0) - (a.monthly ?? 0) || a.key.localeCompare(b.key);
+  const totals = totalsOf(subscriptions);
   return {
     subscriptions: subscriptions.sort(order),
     hidden: hidden.sort(order),
-    totals: totalsOf(subscriptions),
+    totals,
+    total: round2(SUBSCRIPTION_KINDS.reduce((sum, kind) => sum + totals[kind], 0)),
     asOf,
   };
 }

@@ -23,10 +23,19 @@ const CADENCE_LABEL = {
 } as const;
 
 const HEADING: Record<SubscriptionKind, string> = {
-  subscription: "Subscriptions",
-  bill: "Bills",
-  other: "Other recurring",
+  subscription: "Subscriptions (wants)",
+  bill: "Bills (needs)",
+  other: "Other",
 };
+
+const SOURCE: Record<Subscription["confidence"], string> = {
+  schedule: "",
+  tagged: " (from your Subscriptions tag)",
+  account: " (loan account)",
+};
+
+const counted = (rows: Subscription[]) =>
+  rows.filter((s) => !s.stopped && s.cadence !== "unknown").length;
 
 function flagLabel(flag: SubscriptionFlag): string {
   switch (flag.kind) {
@@ -36,6 +45,8 @@ function flagLabel(flag: SubscriptionFlag): string {
       return "New";
     case "stopped":
       return "Seems to have stopped";
+    case "stale-account":
+      return `No data for this account since ${formatDay(flag.ref)}`;
   }
 }
 
@@ -45,7 +56,7 @@ function save() {
 
 /**
  * Recurring charges found in the ledger (docs/spec/subscriptions.md). A core
- * card, not a `src/panels/` panel, because it writes: "not a subscription" and
+ * card, not a `src/panels/` panel, because it writes: "not recurring" and
  * "dismiss" are stored in the ledger. Merchant names come straight off bank
  * statements, so they are only ever rendered as React text.
  */
@@ -55,14 +66,14 @@ export function SubscriptionsCard({ transactions }: { transactions: Transaction[
   const unmarkSubscription = useLedgerStore((s) => s.unmarkSubscription);
   const [showHidden, setShowHidden] = useState(false);
 
-  const { subscriptions, hidden, totals } = useMemo(
+  const { subscriptions, hidden, totals, total } = useMemo(
     () => findSubscriptions(transactions, { today: todayIso(), marks }),
     [transactions, marks],
   );
 
   if (subscriptions.length === 0 && hidden.length === 0) return null;
 
-  function notASubscription(sub: Subscription) {
+  function notRecurring(sub: Subscription) {
     markSubscription(sub.key, "not-subscription", "");
     save();
     toast.message(`Hid ${sub.merchant}`, {
@@ -79,16 +90,17 @@ export function SubscriptionsCard({ transactions }: { transactions: Transaction[
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Recurring charges</CardTitle>
+        <CardTitle>Recurring</CardTitle>
         <p className="text-sm text-muted-foreground">
-          Found in your own transactions, on this device.
+          About <span className="tabular-nums">{formatMoney(total)}</span> a month across{" "}
+          {counted(subscriptions)}. Found in your own transactions, on this device.
         </p>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
         {SUBSCRIPTION_KINDS.map((kind) => {
           const rows = subscriptions.filter((s) => s.kind === kind);
           if (rows.length === 0) return null;
-          const active = rows.filter((s) => !s.stopped && s.cadence !== "unknown").length;
+          const active = counted(rows);
           const unscheduled = rows.filter((s) => s.cadence === "unknown").length;
           return (
             <section key={kind} className="flex flex-col gap-2 pt-2 first:pt-0">
@@ -111,7 +123,7 @@ export function SubscriptionsCard({ transactions }: { transactions: Transaction[
                     <p className="truncate text-sm font-medium">{sub.merchant}</p>
                     <p className="text-xs text-muted-foreground">
                       {CADENCE_LABEL[sub.cadence]}
-                      {sub.confidence === "tagged" ? " (from your Subscriptions tag)" : ""} ·{" "}
+                      {SOURCE[sub.confidence]} ·{" "}
                       <span className="tabular-nums">
                         {sub.variable ? "about " : ""}
                         {formatMoney(sub.typical)}
@@ -155,8 +167,8 @@ export function SubscriptionsCard({ transactions }: { transactions: Transaction[
                       </>
                     )}
                   </p>
-                  <Button variant="ghost" size="sm" onClick={() => notASubscription(sub)}>
-                    Not a subscription
+                  <Button variant="ghost" size="sm" onClick={() => notRecurring(sub)}>
+                    Not recurring
                   </Button>
                 </div>
               ))}
@@ -170,7 +182,7 @@ export function SubscriptionsCard({ transactions }: { transactions: Transaction[
               className="self-start text-xs text-muted-foreground hover:text-foreground"
               onClick={() => setShowHidden((v) => !v)}
             >
-              {showHidden ? "Hide" : "Show"} {hidden.length} marked not a subscription
+              {showHidden ? "Hide" : "Show"} {hidden.length} marked not recurring
             </button>
             {showHidden
               ? hidden.map((sub) => (

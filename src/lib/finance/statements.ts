@@ -46,6 +46,49 @@ export function kindFromLocalPath(path: string, fallback: AccountKind): AccountK
   return fallback;
 }
 
+const MONTH_NAMES = new Set([
+  ...["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec"],
+  ...["january", "february", "march", "april", "june", "july", "august"],
+  ...["september", "october", "november", "december"],
+]);
+const RANGE_WORDS = new Set(["through", "thru", "to", "from", "until", "and"]);
+/** A year, or a year run together with its month and day: 2026, 202603, 20260331. */
+const YEAR = /^(?:19|20)\d{2}(?:0[1-9]|1[0-2])?(?:0[1-9]|[12]\d|3[01])?$/;
+
+function isPeriodWord(word: string): boolean {
+  const w = word.toLowerCase();
+  return YEAR.test(w) || /^\d{1,2}$/.test(w) || MONTH_NAMES.has(w) || RANGE_WORDS.has(w);
+}
+
+function withoutPeriod(segment: string): string {
+  const kept: string[] = [];
+  let run: string[] = [];
+  const flush = () => {
+    if (!run.some((w) => YEAR.test(w))) kept.push(...run);
+    run = [];
+  };
+  for (const word of segment.split(/[\s_-]+/).filter(Boolean)) {
+    if (isPeriodWord(word)) {
+      run.push(word);
+    } else {
+      flush();
+      kept.push(word);
+    }
+  }
+  flush();
+  return kept.join(" ");
+}
+
+/**
+ * The account a statement's `accountName` is for. That name is the file's path,
+ * and an export is often named for the period it covers, so next month's file
+ * names the same account differently. Dropping every run of dates and range
+ * words that holds a year leaves the folder and the account's own words.
+ */
+export function statementAccount(accountName: string): string {
+  return accountName.split("/").map(withoutPeriod).filter(Boolean).join("/");
+}
+
 export function parseStatementAtPath(path: string, text: string): ImportFileResult {
   const parsed = parseStatementFile(path, text);
   parsed.accountKind = kindFromLocalPath(path, parsed.accountKind);

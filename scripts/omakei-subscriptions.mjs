@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * List the recurring charges in the ledger -- the editor's "Recurring charges"
- * card, in a terminal:
+ * List the recurring charges in the ledger -- the editor's "Recurring" card, in
+ * a terminal:
  *
  *   omakei-subscriptions.mjs [--json] [ledger-path]
  *
@@ -29,7 +29,7 @@ function todayIso() {
 
 const money = (n) => `$${n.toFixed(2)}`;
 
-const HEADING = { subscription: "Subscriptions", bill: "Bills", other: "Other recurring" };
+const HEADING = { subscription: "Subscriptions (wants)", bill: "Bills (needs)", other: "Other" };
 
 /**
  * Merchant names are bank text a merchant chooses. Printed raw, an escape
@@ -42,6 +42,7 @@ const printable = (text) => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
 function flagText(flag) {
   if (flag.kind === "price-up") return `up from ${money(flag.from ?? 0)}`;
   if (flag.kind === "new") return "new";
+  if (flag.kind === "stale-account") return `no data for this account since ${flag.ref}`;
   return "seems to have stopped";
 }
 
@@ -68,17 +69,20 @@ export async function run(
     out.write(`${JSON.stringify(result)}\n`);
     return 0;
   }
-  const { subscriptions, hidden, totals, asOf } = result;
+  const { subscriptions, hidden, totals, total, asOf } = result;
   if (subscriptions.length === 0) {
     out.write(`No recurring charges found (as of ${asOf || "no data"}).\n`);
     return 0;
   }
   const width = Math.min(32, Math.max(...subscriptions.map((s) => printable(s.merchant).length)));
   const name = (s) => printable(s.merchant).slice(0, 32).padEnd(width);
+  const counted = (rows) => rows.filter((s) => !s.stopped && s.cadence !== "unknown").length;
+  const label = { schedule: [], tagged: ["tagged"], account: ["loan account"] };
   const notes = (s, extra) => {
     const all = [...extra, ...s.flags.map(flagText)];
     return all.length ? `  [${all.join(", ")}]` : "";
   };
+  out.write(`Recurring: about ${money(total)} a month across ${counted(subscriptions)}.\n\n`);
   for (const kind of SUBSCRIPTION_KINDS) {
     const rows = subscriptions.filter((s) => s.kind === kind);
     if (rows.length === 0) continue;
@@ -89,27 +93,28 @@ export async function run(
       out.write(
         `${name(s)}  ${s.cadence.padEnd(7)}  ${money(s.typical).padStart(9)}  ` +
           `${money(s.monthly).padStart(9)}/mo  last ${s.lastDate}${s.stopped ? "" : `  next ${s.nextDate}`}` +
-          `${notes(s, s.confidence === "tagged" ? ["tagged"] : [])}\n`,
+          `${notes(s, label[s.confidence])}\n`,
       );
     }
     if (unscheduled.length) {
-      out.write("Tagged, no schedule yet (not in the monthly total):\n");
+      out.write("No schedule yet (not in the monthly total):\n");
       for (const s of unscheduled) {
         out.write(
           `${name(s)}  ${money(s.typical).padStart(9)}  ${s.count} ${s.count === 1 ? "charge" : "charges"}  ` +
-            `last ${s.lastDate}${notes(s, [])}\n`,
+            `last ${s.lastDate}${notes(s, label[s.confidence])}\n`,
         );
       }
     }
-    const active = rows.filter((s) => !s.stopped && s.cadence !== "unknown").length;
-    out.write(`${HEADING[kind]}: about ${money(totals[kind])} a month across ${active}.\n\n`);
+    out.write(
+      `${HEADING[kind]}: about ${money(totals[kind])} a month across ${counted(rows)}.\n\n`,
+    );
   }
-  const active = subscriptions.filter((s) => !s.stopped && s.cadence !== "unknown").length;
+  const active = counted(subscriptions);
   const stopped = subscriptions.filter((s) => s.stopped).length;
   const waiting = subscriptions.filter((s) => s.cadence === "unknown").length;
   out.write(
-    `${active} active, ${stopped} stopped, ${waiting ? `${waiting} tagged with no schedule yet, ` : ""}` +
-      `${hidden.length} marked not a subscription (as of ${asOf}).\n`,
+    `${active} active, ${stopped} stopped, ${waiting ? `${waiting} with no schedule yet, ` : ""}` +
+      `${hidden.length} marked not recurring (as of ${asOf}).\n`,
   );
   return 0;
 }

@@ -49,7 +49,7 @@ Dev:       npm run dev:isolated   # import against .dev/, never your real ledger
 
 ```
 src/lib/finance/parse.ts        → format detection, column detection, date/amount parsing, sign normalization
-src/lib/finance/statements.ts   → account-kind from folder name; dropped-file vs server-path entry points; container-segment strip; preview merge
+src/lib/finance/statements.ts   → account-kind from folder name; the account a statement name is for (statementAccount); dropped-file vs server-path entry points; container-segment strip; preview merge
 src/lib/finance/dropped-entries.ts → flatten a browser drag-and-drop, folders included, into File[] (used by StatementDropzone)
 src/lib/finance/categories.ts   → CATEGORIES, the default categorizer patterns, categoryName()
 src/lib/finance/fingerprint.ts  → merchant extraction, the dedupe fingerprint, rule matching
@@ -220,7 +220,8 @@ withdrawal and counts the payment twice, so don't write one.
   insensitivity, `/regex/` literals, compact-span matches like `WAL-MART`).
 - `transfers.test.ts` — the pairing cases, plus "payroll is never a transfer".
 - `statements.test.ts` — `kindFromLocalPath` precedence, preview de-duplication,
-  `droppedStatementPath` container strip.
+  `droppedStatementPath` container strip, `statementAccount` dropping the period
+  a statement's name covers.
 - `dropped-entries.test.ts` — `collectEntryFiles` flattens a fake entry tree,
   keeps a loose file's bare name, and drains a directory reader across batches.
 - `ledger-contract.test.ts` — guards the `CATEGORIES` table against
