@@ -156,10 +156,17 @@ Pure function in `src/lib/finance/subscriptions.ts`.
     description key splits it into series too short to find. So a loan
     account's candidates (step 1: money out, not filed under `transfers`, so
     an escrow payout is never a payment) are keyed on the account:
-    `account:<accountKind>:<accountName, lower-cased>`. They are split into
-    amount bands (step 5, without the one-price check), and every band is a
-    row with `kind: "bill"`, `confidence: "account"`, and the account name as
-    its merchant. A band has a cadence once it has at least 2 charges on one
+    `account:<accountKind>:<statementAccount(accountName), lower-cased>`.
+    `accountName` is the statement file's path, and an export is often named
+    for the period it covers (`Mortgage/Zorp Lending 2025 12 through 2026 08`),
+    so the next export of the same account carries another name. No account
+    number or other stable id reaches the ledger. `statementAccount`
+    (`statements.ts`) drops every run of dates and range words that holds a
+    year (`2026`, `2026 08`, `2025-12-01 to 2026-09-30`, `Jan 2026 - Mar 2026`,
+    `20260131`) from each path segment, so every export of one account names
+    `Mortgage/Zorp Lending`. A loan row's key and merchant both use it. They
+    are split into amount bands (step 5, without the one-price check), and
+    every band is a row with `kind: "bill"` and `confidence: "account"`. A band has a cadence once it has at least 2 charges on one
     (step 3, with the billed-category rule for one missed period), else
     cadence `unknown`, like a tagged row. When an account has more than one
     band, each row's key is `<account key>|<typical dollars>`. A loan row is
@@ -292,7 +299,9 @@ result carries `totals` and `total`.
   kind from the newest categorized charge with a total per kind, hidden rows
   in no total, and a price rise moving the monthly cost to the new price while
   a variable bill keeps its median; a mortgage whose bank line keeps changing
-  is one bill keyed on its account; a mortgage feed that ends months early is
+  is one bill keyed on its account; a mortgage imported from two statement
+  files named for different periods is one current bill, not two rows with
+  the older one stale; a mortgage feed that ends months early is
   `stale-account`, not stopped, and still in the total; an escrow
   payout filed under `transfers` is in no row; hardware-store receipts
   filed under `housing` are not a bill; every loan account with a payment in
@@ -348,6 +357,12 @@ same run showed hardware-store receipts filed under `housing` could pass as a
 variable bill. The loan-account key, `stale-account`, and the billed-category
 rule came from it.
 
+A sixth check (2026-10) found the loan key would not hold. The mortgage's
+statements are exported as one file named for the months it covers. The next
+export names a later month, so its new payments get another `accountName`.
+Keyed on the raw name, the mortgage would be two rows, counted twice, with
+the older one flagged `stale-account`. `statementAccount` came from it.
+
 ## Open Questions
 
 1. **Bar widget.** A "≈ $X/mo recurring · 1 flagged" line in the popup would
@@ -365,3 +380,10 @@ rule came from it.
    price comes one period later. A plan that bills every six or seven weeks
    stays `unknown`, and out of the total, until a band for it exists. It stays
    listed until it is 13 months old.
+5. **The account name is still the file's path.** Import stores it unchanged,
+   so other readers that group by `accountName` (the CLI's account list and
+   `--account` filter, transfer pairing's different-account check) still see
+   one account per export. `statementAccount` drops a 4-digit number that
+   reads as a year (19xx, 20xx), so an account number ending `2019` in a file
+   name is dropped with the dates. Storing a stable account id at import
+   (an OFX `ACCTID`, a converter's last four digits) would retire both.

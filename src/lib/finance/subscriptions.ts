@@ -7,6 +7,7 @@
  * The rules and thresholds are `docs/spec/subscriptions.md`.
  */
 import { extractMerchant, isGenericMerchant, REFERENCE_CODES, spacedForm } from "./fingerprint.ts";
+import { statementAccount } from "./statements.ts";
 import { isTransferTx } from "./transfers.ts";
 import type { AccountKind, Transaction } from "./types.ts";
 
@@ -261,7 +262,7 @@ function closeEnough(a: number, b: number): boolean {
 
 type Charge = {
   id: string;
-  accountName: string;
+  account: string;
   date: string;
   amount: number;
   description: string;
@@ -436,7 +437,7 @@ function seriesOf(key: string, charges: Charge[], clock: Clock, pace: Pace): Sub
 
   const base = {
     key,
-    merchant: (pace === "loan" && lastCharge.accountName) || nameOf(sorted, key),
+    merchant: (pace === "loan" && lastCharge.account) || nameOf(sorted, key),
     kind,
     confidence,
     typical,
@@ -485,9 +486,7 @@ function bandsOf(charges: Charge[]): Charge[][] {
 /** A loan account's payments are one bill whatever their bank lines say, so the account is the key. */
 function loanKey(tx: Transaction): string | null {
   return LOAN_ACCOUNTS.has(tx.accountKind)
-    ? `account:${tx.accountKind}:${String(tx.accountName ?? "")
-        .toLowerCase()
-        .trim()}`
+    ? `account:${tx.accountKind}:${statementAccount(String(tx.accountName ?? "")).toLowerCase()}`
     : null;
 }
 
@@ -528,7 +527,7 @@ export function findSubscriptions(
     const list = groups.get(key) ?? [];
     list.push({
       id: tx.id,
-      accountName: String(tx.accountName ?? ""),
+      account: statementAccount(String(tx.accountName ?? "")),
       date: tx.date,
       amount: Math.abs(tx.amount),
       description: tx.description,
