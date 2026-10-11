@@ -14,6 +14,14 @@ const STORE_ID = /\s+[A-Za-z]*\d{3,}\b/g;
 
 const WEAK_LEAD = new Set(["the", "sq", "tst"]);
 
+/**
+ * A processor's per-charge reference, like the `4QJ7X2M9P` in
+ * `ZORBTIME*4QJ7X2M9P`: six or more letters and digits, with digits between
+ * letters. A brand with one digit in it (`ZORP4KIDS`) is not one.
+ */
+export const REFERENCE_CODES =
+  /(?<=^|[\s*])(?=[a-z0-9]*\d[a-z0-9]*\d)(?=[a-z0-9]*[a-z]\d+[a-z])[a-z0-9]{6,}(?=$|[\s*#])/gi;
+
 /** Last leftover word after the state code — usually the city. */
 const TRAILING_CITY = /\s+[A-Za-z][A-Za-z.'-]*$/;
 
@@ -36,6 +44,7 @@ export function compactForm(value: string): string {
 export function extractMerchant(description: string): string {
   let s = description.replace(/\s+/g, " ").trim();
   if (/\batm\b/i.test(s)) return "ATM";
+  s = s.replace(REFERENCE_CODES, "");
   for (const prefix of PREFIXES) {
     s = s.replace(prefix, "");
   }
@@ -51,14 +60,15 @@ export function extractMerchant(description: string): string {
   s = s.replace(/\s{2,}/g, " ").trim();
   const tokens = s
     .split(" ")
-    .filter((t) => t && t !== "*" && t !== "&" && t !== "-")
+    .map((t) => t.replace(/^\*+|\*+$/g, ""))
+    .filter((t) => t && t !== "&" && t !== "-")
     .filter((t, i) => {
       if (!/^\d+$/.test(t)) return true;
       // Keep brand numbers (76) as the key; drop 4+ digit store prefixes.
       return i === 0 && t.length <= 3;
     });
   if (tokens.length === 0) return description.slice(0, 32).trim();
-  const first = tokens[0]!.replace(/^\*+|\*+$/g, "");
+  const first = tokens[0]!;
   if (/^\d{2,3}$/.test(first)) return first;
   if (first.length >= 6 && !WEAK_LEAD.has(first.toLowerCase())) return first;
   if (WEAK_LEAD.has(first.toLowerCase())) return tokens.slice(0, 3).join(" ");

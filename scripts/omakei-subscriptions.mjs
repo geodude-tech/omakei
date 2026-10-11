@@ -16,8 +16,8 @@
  */
 import {
   findSubscriptions,
-  monthlyTotal,
   parseSubscriptionMarks,
+  SUBSCRIPTION_KINDS,
 } from "../src/lib/finance/subscriptions.ts";
 import { homedir } from "node:os";
 import { readLedgerForWidget } from "./omakei-read-ledger.mjs";
@@ -28,6 +28,8 @@ function todayIso() {
 }
 
 const money = (n) => `$${n.toFixed(2)}`;
+
+const HEADING = { subscription: "Subscriptions", bill: "Bills", other: "Other recurring" };
 
 /**
  * Merchant names are bank text a merchant chooses. Printed raw, an escape
@@ -66,23 +68,48 @@ export async function run(
     out.write(`${JSON.stringify(result)}\n`);
     return 0;
   }
-  const { subscriptions, hidden, asOf } = result;
+  const { subscriptions, hidden, totals, asOf } = result;
   if (subscriptions.length === 0) {
     out.write(`No recurring charges found (as of ${asOf || "no data"}).\n`);
     return 0;
   }
   const width = Math.min(32, Math.max(...subscriptions.map((s) => printable(s.merchant).length)));
-  for (const s of subscriptions) {
-    const flags = s.flags.length ? `  [${s.flags.map(flagText).join(", ")}]` : "";
-    out.write(
-      `${printable(s.merchant).slice(0, 32).padEnd(width)}  ${s.cadence.padEnd(7)}  ${money(s.typical).padStart(9)}  ` +
-        `${money(s.monthly).padStart(9)}/mo  last ${s.lastDate}${s.stopped ? "" : `  next ${s.nextDate}`}${flags}\n`,
-    );
+  const name = (s) => printable(s.merchant).slice(0, 32).padEnd(width);
+  const notes = (s, extra) => {
+    const all = [...extra, ...s.flags.map(flagText)];
+    return all.length ? `  [${all.join(", ")}]` : "";
+  };
+  for (const kind of SUBSCRIPTION_KINDS) {
+    const rows = subscriptions.filter((s) => s.kind === kind);
+    if (rows.length === 0) continue;
+    out.write(`${HEADING[kind]}\n`);
+    const unscheduled = rows.filter((s) => s.cadence === "unknown");
+    for (const s of rows) {
+      if (s.cadence === "unknown") continue;
+      out.write(
+        `${name(s)}  ${s.cadence.padEnd(7)}  ${money(s.typical).padStart(9)}  ` +
+          `${money(s.monthly).padStart(9)}/mo  last ${s.lastDate}${s.stopped ? "" : `  next ${s.nextDate}`}` +
+          `${notes(s, s.confidence === "tagged" ? ["tagged"] : [])}\n`,
+      );
+    }
+    if (unscheduled.length) {
+      out.write("Tagged, no schedule yet (not in the monthly total):\n");
+      for (const s of unscheduled) {
+        out.write(
+          `${name(s)}  ${money(s.typical).padStart(9)}  ${s.count} ${s.count === 1 ? "charge" : "charges"}  ` +
+            `last ${s.lastDate}${notes(s, [])}\n`,
+        );
+      }
+    }
+    const active = rows.filter((s) => !s.stopped && s.cadence !== "unknown").length;
+    out.write(`${HEADING[kind]}: about ${money(totals[kind])} a month across ${active}.\n\n`);
   }
-  const active = subscriptions.filter((s) => !s.stopped).length;
+  const active = subscriptions.filter((s) => !s.stopped && s.cadence !== "unknown").length;
+  const stopped = subscriptions.filter((s) => s.stopped).length;
+  const waiting = subscriptions.filter((s) => s.cadence === "unknown").length;
   out.write(
-    `\n${active} active, ${subscriptions.length - active} stopped, ${hidden.length} marked not a subscription; ` +
-      `about ${money(monthlyTotal(subscriptions))} a month (as of ${asOf}).\n`,
+    `${active} active, ${stopped} stopped, ${waiting ? `${waiting} tagged with no schedule yet, ` : ""}` +
+      `${hidden.length} marked not a subscription (as of ${asOf}).\n`,
   );
   return 0;
 }
