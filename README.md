@@ -144,6 +144,19 @@ Each card on the dashboard is one file in `src/panels/`. If an answer is worth s
 
 This needs a clone of the repository rather than a plugin install, because panels are compiled into the bundle. See [`src/panels/README.md`](src/panels/README.md) for the contract, and `npm run build` after adding one.
 
+## Using Omakei with an AI agent
+
+The rules an agent follows when it uses Omakei are in [`skills/omakei/SKILL.md`](skills/omakei/SKILL.md). Every install has the file at `~/.config/omarchy/plugins/omakei/skills/omakei/SKILL.md`. It tells the agent to answer from Omakei's own commands, keep the ledger on this computer, back up before a write, and ask before it changes anything.
+
+To point Grok Bot or another agent at it, tell the agent: "Follow `~/.config/omarchy/plugins/omakei/skills/omakei/SKILL.md` when you work with my Omakei ledger." An agent started in the plugin directory finds it through `AGENTS.md`. If your agent loads skills from a folder, link the skill there. For Claude Code:
+
+```sh
+mkdir -p ~/.claude/skills
+ln -s ~/.config/omarchy/plugins/omakei/skills/omakei ~/.claude/skills/omakei
+```
+
+`omarchy plugin update omakei` updates the skill with the rest of the plugin. Your own category rules, pins, and "not recurring" marks stay in your ledger, not in the skill.
+
 ## Your data
 
 Statements stay in the folder you attached; the generated ledger is kept in a directory only your user can open (`~/.local/state/omakei/ledgers/`, mode 0700). Removing the plugin deletes neither. A ledger left in the attached folder by an older version is copied there once and then left alone. There is no account, no cloud, and no telemetry.
@@ -180,8 +193,6 @@ gitignored, so development never reads or rewrites the real ones.
 
 [`docs/agents.md`](docs/agents.md) is the tour of how the repository fits
 together and why — worth reading, or handing to an agent, before a first change.
-It sits under `docs/` rather than at the root so that installing the plugin does
-not leave discoverable agent instructions on your machine.
 
 ## License
 

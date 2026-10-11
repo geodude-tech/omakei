@@ -2,9 +2,9 @@
 
 Notes on the shape of this codebase and the reasoning behind it, for anyone —
 person or agent — picking the project up. It describes how Omakei is built; it
-is a record of decisions, not a set of instructions to a reader, and it lives
-under `docs/` rather than at the repository root so that installing the plugin
-does not drop discoverable agent instructions into someone's machine.
+is a record of decisions, not a set of instructions to a reader. The
+instructions for an agent that _uses_ Omakei are `skills/omakei/SKILL.md`, and
+the root `AGENTS.md` points at both.
 
 A local ledger built from a folder of statements, shaped so an agent can interrogate it, plus a dashboard that agent extends one panel at a time.
 
@@ -45,6 +45,29 @@ duplicated anywhere else.
 procedure an agent follows to clear the uncategorized list through
 `omakei-categorize.mjs`. Its examples are invented on purpose — it lives in a
 public repository and must never quote a real ledger.
+
+## The agent skill
+
+`skills/omakei/SKILL.md` holds the ground rules every agent follows when it
+uses Omakei: answer from the commands, keep the ledger local, keep ledger data
+out of the repository, write only through the scripts, and name recurring
+charges the way the finder does. It links to `docs/ledger.md` and the
+categorize runbook instead of restating them. It sits at a fixed path in the
+tree because `omarchy plugin add` clones the whole tree, so every install has
+it at `~/.config/omarchy/plugins/omakei/skills/omakei/SKILL.md`. That reverses
+the earlier choice to keep agent instructions out of the root: the owner asked
+for a skill a fresh install has by default.
+
+Personal rules are not ground rules. Category rules, pins, and "not recurring"
+marks live in each person's ledger, written by `omakei-categorize.mjs` or the
+editor, and never in the skill, a doc, or `DEFAULT_PATTERNS`.
+
+`scripts/agent-skill.test.mjs` keeps the skill true. It runs every `node
+scripts/…` command the skill gives in an empty sandbox and fails if a script
+rejects the arguments before it looks for a ledger. It also checks that every
+path and link resolves, that the frontmatter is valid, and that the
+Subscriptions and Bills rows name the categories `findSubscriptions` actually
+sorts into each group.
 
 ## Panels
 
