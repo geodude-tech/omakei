@@ -2,10 +2,11 @@
  * `docs/agent-skill/SKILL.md` is what an agent follows once the user points it
  * there, so a renamed script, a dropped flag, a moved doc, or a changed
  * category set has to fail `npm test` instead of sending the agent down a dead
- * path.
+ * path. The skill has to stay opt-in, so a file that agents load on their own
+ * fails here too.
  */
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -118,4 +119,58 @@ test("the recurring table names the categories the finder sorts into each group"
   assert.deepEqual(documentedCategories("Bills"), named("bill"));
   assert.match(skill, /^\| Bills +\|.*every payment from a mortgage account/m);
   assert.equal(kindOf(null, "mortgage"), "bill", "an uncategorized mortgage payment is a bill");
+});
+
+// `omarchy plugin add` clones the whole tree into the user's config, so any of
+// these would put this plugin's instructions in front of the user's own agent
+// without asking (omarchy-plugin-marketplace#7136).
+const AUTO_DISCOVERED = [
+  /(^|\/)(AGENTS|CLAUDE|GEMINI)\.md$/,
+  /(^|\/)\.cursorrules$/,
+  /(^|\/)\.(cursor|claude)\//,
+  /^\.github\/copilot-instructions\.md$/,
+  /^skills\//,
+];
+
+const autoDiscovered = (paths) => paths.filter((p) => AUTO_DISCOVERED.some((re) => re.test(p)));
+
+test("the agent-file guard flags what agents load on their own and nothing else", () => {
+  assert.deepEqual(
+    autoDiscovered([
+      "AGENTS.md",
+      "src/CLAUDE.md",
+      "GEMINI.md",
+      ".cursorrules",
+      ".cursor/rules/omakei.mdc",
+      ".claude/settings.json",
+      ".github/copilot-instructions.md",
+      "skills/omakei/SKILL.md",
+      "docs/agents.md",
+      "docs/agent-skill/SKILL.md",
+      "docs/skills/notes.md",
+      ".github/workflows/ci.yml",
+    ]),
+    [
+      "AGENTS.md",
+      "src/CLAUDE.md",
+      "GEMINI.md",
+      ".cursorrules",
+      ".cursor/rules/omakei.mdc",
+      ".claude/settings.json",
+      ".github/copilot-instructions.md",
+      "skills/omakei/SKILL.md",
+    ],
+  );
+});
+
+test("git tracks no file that an agent loads on its own", () => {
+  const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: ROOT, encoding: "utf8" })
+    .split("\0")
+    .filter(Boolean);
+  assert.ok(tracked.includes("docs/agent-skill/SKILL.md"));
+  assert.deepEqual(
+    autoDiscovered(tracked),
+    [],
+    "keep agent material under docs/ so the user opts in to it",
+  );
 });

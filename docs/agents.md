@@ -75,7 +75,8 @@ scripts/…` command the skill gives in an empty sandbox and fails if a script
 rejects the arguments before it looks for a ledger. It also checks that every
 path and link resolves, that the frontmatter is valid, and that the
 Subscriptions and Bills rows name the categories `findSubscriptions` actually
-sorts into each group.
+sorts into each group. It fails if git tracks any of the auto-discovered files
+listed above.
 
 ## Panels
 
