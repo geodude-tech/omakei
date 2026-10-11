@@ -93,8 +93,8 @@ test("honours not-a-subscription marks stored in the ledger, and prints a readab
   const text = cli([dir]);
   assert.match(text, /NETFLIX\.COM\s+monthly\s+\$15\.49/);
   assert.doesNotMatch(text, /PLANET/);
-  assert.match(text, /^Other recurring: about \$15\.49 a month across 1\.$/m);
-  assert.match(text, /^1 active, 0 stopped, 1 marked not a subscription \(as of 2026-09-21\)\.$/m);
+  assert.match(text, /^Other: about \$15\.49 a month across 1\.$/m);
+  assert.match(text, /^1 active, 0 stopped, 1 marked not recurring \(as of 2026-09-21\)\.$/m);
 });
 
 test("a missing ledger is an error on stderr, not a crash", () => {
@@ -148,13 +148,13 @@ test("tagged charges with no schedule yet are listed apart and left out of the m
   const text = cli([dir]);
   assert.match(
     text,
-    /^Tagged, no schedule yet \(not in the monthly total\):\nZorpaudio\s+\$13\.10 {2}2 charges {2}last 2026-09-02 {2}\[new\]$/m,
+    /^No schedule yet \(not in the monthly total\):\nZorpaudio\s+\$13\.10 {2}2 charges {2}last 2026-09-02 {2}\[tagged, new\]$/m,
   );
-  assert.match(text, /^Subscriptions: about \$0\.00 a month across 0\.$/m);
-  assert.match(text, /^Other recurring: about \$40\.48 a month across 2\.$/m);
+  assert.match(text, /^Subscriptions \(wants\): about \$0\.00 a month across 0\.$/m);
+  assert.match(text, /^Other: about \$40\.48 a month across 2\.$/m);
   assert.match(
     text,
-    /^2 active, 0 stopped, 1 tagged with no schedule yet, 0 marked not a subscription \(as of 2026-09-21\)\.$/m,
+    /^2 active, 0 stopped, 1 with no schedule yet, 0 marked not recurring \(as of 2026-09-21\)\.$/m,
   );
 });
 
@@ -171,26 +171,28 @@ function mixedLedger() {
   return { version: 1, transactions, rules: [] };
 }
 
-test("subscriptions and bills are printed in their own sections, each with its subtotal", async () => {
+test("all recurring is totalled, then wants, needs, and other each in a section with its subtotal", async () => {
   const dir = privateDir();
   await updateLedgerDb(dir, () => mixedLedger());
   assert.equal(
     cli([dir]),
     [
-      "Subscriptions",
-      "ZORPFLIX  monthly     $12.50     $12.50/mo  last 2026-09-05  next 2026-10-05",
-      "Subscriptions: about $12.50 a month across 1.",
+      "Recurring: about $397.50 a month across 4.",
       "",
-      "Bills",
+      "Subscriptions (wants)",
+      "ZORPFLIX  monthly     $12.50     $12.50/mo  last 2026-09-05  next 2026-10-05",
+      "Subscriptions (wants): about $12.50 a month across 1.",
+      "",
+      "Bills (needs)",
       "ZORPLOAN  monthly    $310.00    $310.00/mo  last 2026-09-05  next 2026-10-05",
       "ZORPTEL   monthly     $45.00     $45.00/mo  last 2026-09-05  next 2026-10-05",
-      "Bills: about $355.00 a month across 2.",
+      "Bills (needs): about $355.00 a month across 2.",
       "",
-      "Other recurring",
+      "Other",
       "ZORPGYM   monthly     $30.00     $30.00/mo  last 2026-09-05  next 2026-10-05",
-      "Other recurring: about $30.00 a month across 1.",
+      "Other: about $30.00 a month across 1.",
       "",
-      "4 active, 0 stopped, 0 marked not a subscription (as of 2026-09-05).",
+      "4 active, 0 stopped, 0 marked not recurring (as of 2026-09-05).",
       "",
     ].join("\n"),
   );
@@ -210,4 +212,23 @@ test("the JSON carries each row's kind and a monthly total per kind", async () =
     ],
   );
   assert.deepEqual(out.totals, { subscription: 12.5, bill: 355, other: 30 });
+  assert.equal(out.total, 397.5);
+});
+
+test("a mortgage whose feed ended early is a bill labelled with the account's last data date", async () => {
+  const dir = privateDir();
+  const transactions = [charge("c1", "2026-09-28", "ZORPCAFE", -4, "coffee")];
+  const lines = ["ZORPLEND PMT", "BY POST", "ZORPLEND", "ZORPLEND"];
+  for (let m = 3; m <= 6; m++) {
+    transactions.push({
+      ...charge(`h${m}`, `2026-0${m}-17`, lines[m - 3], -1843.27, "housing"),
+      accountName: "Zorp Home Loan",
+      accountKind: "mortgage",
+    });
+  }
+  await updateLedgerDb(dir, () => ({ version: 1, transactions, rules: [] }));
+  assert.match(
+    cli([dir]),
+    /^Bills \(needs\)\nZorp Home Loan {2}monthly {3}\$1843\.27 {3}\$1843\.27\/mo {2}last 2026-06-17 {2}next 2026-07-17 {2}\[loan account, no data for this account since 2026-06-17\]\nBills \(needs\): about \$1843\.27 a month across 1\.$/m,
+  );
 });

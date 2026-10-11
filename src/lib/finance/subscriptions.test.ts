@@ -364,6 +364,7 @@ test("an empty ledger finds nothing", () => {
     subscriptions: [],
     hidden: [],
     totals: { subscription: 0, bill: 0, other: 0 },
+    total: 0,
     asOf: "",
   });
 });
@@ -820,12 +821,15 @@ test("no transaction is placed in two rows", () => {
     tagged("2026-09-19", 88.2, "ZORPY WWW.ZORPY.COMPA"),
     tagged("2026-09-19", 17.35, "ZORPY"),
     ...everyDays("2026-06-06", 16, 7, (i) => 80 + (i % 5) * 23, "SAFEWAY #1234", "groceries"),
+    ...churnedMortgage(),
+    onLoan("2026-04-16", 1108.4, "ZORP ESCROW PAYOUT", "transfers"),
+    onLoan("2026-06-20", 9000, "PRINCIPAL CURTAILMENT"),
     ANCHOR,
   ];
   const { subscriptions } = findSubscriptions(rows, { today: "2026-09-30" });
   const placed = subscriptions.flatMap((s) => s.ids);
-  assert.equal(placed.length, 35);
-  assert.equal(new Set(placed).size, 35);
+  assert.equal(placed.length, 45);
+  assert.equal(new Set(placed).size, 45);
 });
 
 test("after a price rise the monthly cost is the new price, not the median", () => {
@@ -861,7 +865,7 @@ test("each row is a subscription, a bill, or other, by the category of its lates
     ...filed(nine(18, "ZORPMAG"), "entertainment"),
     ANCHOR,
   ];
-  const { subscriptions, totals } = findSubscriptions(rows, { today: "2026-09-30" });
+  const { subscriptions, totals, total } = findSubscriptions(rows, { today: "2026-09-30" });
   assert.deepEqual(
     subscriptions.map((s) => [s.key, s.kind, s.monthly]),
     [
@@ -877,6 +881,7 @@ test("each row is a subscription, a bill, or other, by the category of its lates
     ],
   );
   assert.deepEqual(totals, { subscription: 15.49, bill: 1283, other: 48 });
+  assert.equal(total, 1346.49);
 });
 
 test("hidden rows keep their kind and stay out of the totals", () => {
@@ -900,4 +905,168 @@ test("hidden rows keep their kind and stay out of the totals", () => {
     ],
   );
   assert.deepEqual(totals, { subscription: 12.5, bill: 0, other: 0 });
+});
+
+function onLoan(
+  date: string,
+  amount: number,
+  description: string,
+  categoryId: string | null = "housing",
+  accountName = "Zorp Home Loan",
+): Transaction {
+  return { ...tx(date, -amount, description, categoryId), accountName, accountKind: "mortgage" };
+}
+
+/** Nine invented mortgage payments whose bank line changes three times. */
+function churnedMortgage(): Transaction[] {
+  const dates = [
+    "2025-12-12",
+    "2026-01-12",
+    "2026-02-12",
+    "2026-03-12",
+    "2026-04-12",
+    "2026-05-11",
+    "2026-06-08",
+    "2026-07-09",
+    "2026-08-07",
+  ];
+  const lines = ["ZORPBANK ONLINE PMT 9917", "BY POST", "ZORPLEND", "ZORPLEND"];
+  return dates.map((d, i) => onLoan(d, 1843.27, lines[Math.max(0, i - 5)]!));
+}
+
+function loanRow(s: Subscription) {
+  return {
+    key: s.key,
+    merchant: s.merchant,
+    kind: s.kind,
+    confidence: s.confidence,
+    cadence: s.cadence,
+    monthly: s.monthly,
+    count: s.count,
+    lastDate: s.lastDate,
+    stopped: s.stopped,
+    flags: s.flags,
+  };
+}
+
+test("a mortgage whose bank line keeps changing is one bill keyed on its account", () => {
+  const rows = [...churnedMortgage(), tx("2026-08-28", -4, "ZORPCAFE", "coffee")];
+  const { subscriptions, totals, total } = findSubscriptions(rows, { today: "2026-09-30" });
+  assert.deepEqual(subscriptions.map(loanRow), [
+    {
+      key: "account:mortgage:zorp home loan",
+      merchant: "Zorp Home Loan",
+      kind: "bill",
+      confidence: "account",
+      cadence: "monthly",
+      monthly: 1843.27,
+      count: 9,
+      lastDate: "2026-08-07",
+      stopped: false,
+      flags: [],
+    },
+  ]);
+  assert.deepEqual(totals, { subscription: 0, bill: 1843.27, other: 0 });
+  assert.equal(total, 1843.27);
+});
+
+test("a mortgage feed that ends months before the ledger is stale, not stopped, and still counted", () => {
+  const rows = [...churnedMortgage(), tx("2026-10-02", -4, "ZORPCAFE", "coffee")];
+  const { subscriptions, totals, asOf } = findSubscriptions(rows, { today: "2026-10-05" });
+  assert.equal(asOf, "2026-10-02");
+  assert.deepEqual(subscriptions.map(loanRow), [
+    {
+      key: "account:mortgage:zorp home loan",
+      merchant: "Zorp Home Loan",
+      kind: "bill",
+      confidence: "account",
+      cadence: "monthly",
+      monthly: 1843.27,
+      count: 9,
+      lastDate: "2026-08-07",
+      stopped: false,
+      flags: [{ kind: "stale-account", ref: "2026-08-07" }],
+    },
+  ]);
+  assert.deepEqual(totals, { subscription: 0, bill: 1843.27, other: 0 });
+});
+
+test("an escrow payout filed under transfers is not a mortgage payment", () => {
+  const escrow = onLoan("2026-04-16", 1108.4, "ZORP ESCROW PAYOUT", "transfers");
+  const payments = churnedMortgage();
+  const rows = [...payments, escrow, tx("2026-08-28", -4, "ZORPCAFE", "coffee")];
+  const { subscriptions } = findSubscriptions(rows, { today: "2026-09-30" });
+  assert.deepEqual(
+    subscriptions.map((s) => [s.key, s.ids]),
+    [["account:mortgage:zorp home loan", payments.map((t) => t.id)]],
+  );
+});
+
+test("hardware-store receipts filed under housing are not a bill, while the mortgage is", () => {
+  const receipts = [
+    ["2026-01-09", 84.12],
+    ["2026-02-07", 212.4],
+    ["2026-03-14", 37.95],
+    ["2026-04-11", 129.0],
+    ["2026-05-08", 61.33],
+    ["2026-06-13", 18.47],
+    ["2026-07-10", 305.6],
+    ["2026-08-08", 92.15],
+    ["2026-09-12", 44.8],
+  ] as const;
+  const rows = [
+    ...receipts.map(([d, a]) => tx(d, -a, "ZORPHAUS HARDWARE #0412", "housing")),
+    ...churnedMortgage(),
+  ];
+  const { subscriptions } = findSubscriptions(rows, { today: "2026-09-30" });
+  assert.deepEqual(
+    subscriptions.map((s) => s.key),
+    ["account:mortgage:zorp home loan"],
+  );
+});
+
+test("every loan account with a payment in the last 13 months appears once per payment band", () => {
+  const home = churnedMortgage();
+  const payoff = onLoan("2026-06-20", 9000, "PRINCIPAL CURTAILMENT");
+  const cabin = [
+    onLoan("2026-08-15", 612.5, "ZORPLEND PMT", "housing", "Zorp Cabin Loan"),
+    onLoan("2026-09-15", 612.5, "ZORPLEND", "housing", "Zorp Cabin Loan"),
+  ];
+  const boat = [onLoan("2026-09-01", 240, "ZORPMARINE", null, "Zorp Boat Loan")];
+  const paidOff = [
+    onLoan("2025-05-02", 410, "ZORPAUTO", "housing", "Zorp Old Loan"),
+    onLoan("2025-06-02", 410, "ZORPAUTO", "housing", "Zorp Old Loan"),
+  ];
+  const rows = [...home, payoff, ...cabin, ...boat, ...paidOff, ANCHOR];
+  const { subscriptions, totals } = findSubscriptions(rows, { today: "2026-09-30" });
+  assert.deepEqual(
+    subscriptions.map((s) => [s.key, s.kind, s.cadence, s.monthly, s.count]),
+    [
+      ["account:mortgage:zorp home loan|1843", "bill", "monthly", 1843.27, 9],
+      ["account:mortgage:zorp cabin loan", "bill", "monthly", 612.5, 2],
+      ["account:mortgage:zorp boat loan", "bill", "unknown", null, 1],
+      ["account:mortgage:zorp home loan|9000", "bill", "unknown", null, 1],
+    ],
+  );
+  assert.deepEqual(totals, { subscription: 0, bill: 2455.77, other: 0 });
+  const placed = subscriptions.flatMap((s) => s.ids);
+  assert.deepEqual(
+    [...placed].sort(),
+    [...home, payoff, ...cabin, ...boat].map((t) => t.id).sort(),
+    "every recent loan payment is in exactly one row",
+  );
+});
+
+test("a utility bill with one missed month is still monthly; the same pattern uncategorized is not", () => {
+  const dates = ["2026-06-15", "2026-08-14", "2026-09-15"];
+  const rows = [
+    ...dates.map((d) => tx(d, -71.2, "ZORPWATER UTIL", "utilities")),
+    ...dates.map((d) => tx(d, -71.2, "ZORPSALON")),
+    ANCHOR,
+  ];
+  const { subscriptions } = findSubscriptions(rows, { today: "2026-09-30" });
+  assert.deepEqual(
+    subscriptions.map((s) => [s.key, s.kind, s.cadence, s.monthly]),
+    [["zorpwater", "bill", "monthly", 71.2]],
+  );
 });
