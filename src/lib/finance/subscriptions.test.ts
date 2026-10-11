@@ -8,6 +8,9 @@ import {
   type Subscription,
   type SubscriptionMark,
 } from "./subscriptions.ts";
+import { defaultRules } from "./categories.ts";
+import { mergeImport } from "./ledger.ts";
+import { parseStatementAtPath } from "./statements.ts";
 import type { Transaction } from "./types.ts";
 
 let seq = 0;
@@ -1069,4 +1072,45 @@ test("a utility bill with one missed month is still monthly; the same pattern un
     subscriptions.map((s) => [s.key, s.kind, s.cadence, s.monthly]),
     [["zorpwater", "bill", "monthly", 71.2]],
   );
+});
+
+/** A mortgage statement export covering `dates`, one invented payment each. */
+function mortgageExport(path: string, dates: string[]) {
+  const lines = dates.map((d) => `${d},ZORPLEND PMT,-1843.27`);
+  return parseStatementAtPath(path, ["Date,Description,Amount", ...lines].join("\n"));
+}
+
+test("a mortgage imported from two statement files named for different periods is one current bill", () => {
+  const through = (month: string) =>
+    `Mortgage/Zorp_Lending_Transactions_2025-12_through_2026-${month}.csv`;
+  const august = churnedMortgage().map((t) => t.date);
+  const november = [...august, "2026-09-08", "2026-10-08", "2026-11-09"];
+  const checking = parseStatementAtPath(
+    "Checking/Zorp_Checking.csv",
+    "Date,Description,Amount\n2026-11-18,ZORPCAFE,-4.00\n",
+  );
+  const rules = defaultRules();
+  const first = mergeImport([], [mortgageExport(through("08"), august)], rules, 1);
+  const { transactions, summary } = mergeImport(
+    first.transactions,
+    [mortgageExport(through("11"), november), checking],
+    rules,
+    2,
+  );
+  assert.deepEqual(summary, { added: 4, skipped: 9, uncategorized: 4, files: 2 });
+  const { subscriptions } = findSubscriptions(transactions, { today: "2026-11-20" });
+  assert.deepEqual(subscriptions.map(loanRow), [
+    {
+      key: "account:mortgage:mortgage/zorp lending transactions",
+      merchant: "Mortgage/Zorp Lending Transactions",
+      kind: "bill",
+      confidence: "account",
+      cadence: "monthly",
+      monthly: 1843.27,
+      count: 12,
+      lastDate: "2026-11-09",
+      stopped: false,
+      flags: [],
+    },
+  ]);
 });

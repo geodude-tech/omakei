@@ -6,6 +6,7 @@ import {
   kindFromLocalPath,
   mergePreviews,
   parseStatementAtPath,
+  statementAccount,
 } from "./statements.ts";
 import type { ImportFileResult } from "./types.ts";
 
@@ -79,4 +80,40 @@ test("mergePreviews replaces a file re-parsed under the same name, in place", ()
     "order is unchanged",
   );
   assert.equal(merged[0]!.rows.length, 9, "a.csv now holds the re-parsed rows");
+});
+
+test("statementAccount drops the period a statement's name covers and keeps the account", () => {
+  const names = [
+    "Mortgage/Zorp Lending Transactions 2025 12 through 2026 08",
+    "Mortgage/Zorp Lending Transactions 2025-12-01 to 2026-09-30",
+    "Zorp Home Loan Jan 2026 - Mar 2026",
+    "Zorp Home Loan 20260131",
+    "Zorp Card x4417 2026 03",
+    "Zorp Cabin Loan",
+    "Mortgage/2026 01 through 2026 08",
+  ];
+  assert.deepEqual(names.map(statementAccount), [
+    "Mortgage/Zorp Lending Transactions",
+    "Mortgage/Zorp Lending Transactions",
+    "Zorp Home Loan",
+    "Zorp Home Loan",
+    "Zorp Card x4417",
+    "Zorp Cabin Loan",
+    "Mortgage",
+  ]);
+});
+
+test("two statement files for one account, named for different periods, name one account", () => {
+  const csv = "Date,Description,Amount\n2026-08-07,ZORPLEND PMT,-1843.27\n";
+  const august = parseStatementAtPath(
+    "Mortgage/Zorp_Lending_Transactions_2025-12_through_2026-08.csv",
+    csv,
+  );
+  const september = parseStatementAtPath(
+    "Mortgage/Zorp_Lending_Transactions_2025-12_through_2026-09.csv",
+    csv,
+  );
+  assert.notEqual(august.accountName, september.accountName);
+  assert.equal(statementAccount(august.accountName), "Mortgage/Zorp Lending Transactions");
+  assert.equal(statementAccount(september.accountName), "Mortgage/Zorp Lending Transactions");
 });
