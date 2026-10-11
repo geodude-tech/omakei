@@ -10,8 +10,9 @@ Traces to `docs/intent/omakei.md`; the privacy rules in
 Find the charges that repeat — streaming, phone, gym, insurance, the yearly
 domain renewal — from transactions already in the ledger, on this machine, and
 say three things about them that a list of transactions never does: what they
-cost a month all together, which went up, and which are new or seem to have
-stopped.
+cost a month, which went up, and which are new or seem to have stopped. A car
+loan, insurance, and a phone bill recur, but they are not subscriptions, so
+subscriptions and bills are listed and totalled apart.
 
 **Not in scope:** cancelling anything, reminders or notifications, a network
 lookup of merchant names, ML, income detection, a bar-widget line (see Open
@@ -22,7 +23,8 @@ Questions).
 - `findSubscriptions(transactions, options)` is pure: same input, same output,
   no clock, no I/O. Every rule below has a unit test.
 - The editor shows a "Recurring charges" card with merchant, cadence, typical
-  amount, last and next date, monthly cost, and flags.
+  amount, last and next date, monthly cost, and flags, in a Subscriptions
+  section and a Bills section, each with its monthly subtotal.
 - "Not a subscription" and "dismiss this flag" persist in the ledger and
   survive a reload, a conflict merge, and a write by `omakei-categorize.mjs`.
 - An existing ledger opens and saves with no migration step and no version bump.
@@ -72,10 +74,12 @@ Pure function in `src/lib/finance/subscriptions.ts`.
    gaps wander outside both.
 4. **Amount.** Fixed if at least 75% of consecutive charges differ by no more
    than 15% (or $2) — so one price rise still reads as fixed. Otherwise
-   variable — allowed only for a monthly bill category (`utilities`,
-   `insurance`, `housing`, `debt`, `childcare`) with at least 4 charges. An
-   electric bill passes; a salon visited about monthly does not. Typical amount = median of the last three
-   charges.
+   variable — allowed only for a monthly series of kind `bill` (step 9) with
+   at least 4 charges. An electric bill passes; a salon visited about monthly
+   does not. Typical amount = the median of the last three charges, except
+   after a price rise (see Flags): then it is the latest charge, the new price.
+   The median keeps one odd charge from moving a bill's typical amount; a
+   price rise is not an odd charge, it is what the next charge will be.
 5. **Two plans, one merchant.** If a key fails 3–4 as a whole, its charges are
    split into amount bands (a new band when the next amount is more than 25%
    above the band's first) and each band is tried on its own, so a $0.99 and a
@@ -99,12 +103,34 @@ Pure function in `src/lib/finance/subscriptions.ts`.
 7. **Derived fields.** `nextDate` = last date + one period (month-end
    clamped). `monthly` = typical × 52/12 (weekly), × 1 (monthly), / 12 (yearly).
    A row with cadence `unknown` has `nextDate` and `monthly` null, is never
-   stopped, and is not in the monthly total: the user said it is a
+   stopped, and is not in the monthly totals: the user said it is a
    subscription, but not yet what it costs a month. `ids` lists the row's
    transactions. No transaction is in two rows.
 8. **As of.** The comparison date is the latest transaction date in the ledger,
    capped at `today`. Statements imported three weeks ago must not make
    everything look stopped.
+9. **Kind.** Each row is a `subscription`, a `bill`, or `other`, from the
+   category of its newest charge that has one:
+
+   | category | kind |
+   |---|---|
+   | `subscriptions` | `subscription` |
+   | `housing`, `utilities`, `insurance`, `debt`, `childcare`, `fees` | `bill` |
+   | any other category, or none | `other` |
+
+   The category is the user's own word on what a charge is, so the finder
+   reads it and does not guess from the merchant or the amount. The newest
+   charge wins over a majority because re-filing a charge is how the user
+   corrects it: a phone plan once filed under Subscriptions and now under
+   Utilities is a bill from the moment they re-file it. A charge with no
+   category yet (just imported) says nothing, so the one before it decides. A
+   row with no categorized charge at all is `other`, not `bill`: nobody said
+   it is a bill, and an unfiled gym or app plan is as likely a subscription.
+   To move a row, re-file its latest charge.
+10. **Totals.** `totals` holds one monthly total per kind: the sum of
+    `monthly` over the listed rows of that kind that have a cadence and have
+    not stopped. Hidden rows are in no total. There is no combined total: a
+    subscription total that includes the rent answers no question.
 
 ### Flags
 
@@ -113,7 +139,7 @@ later one shows again.
 
 | flag | when | ref |
 |---|---|---|
-| `price-up` | fixed amount; a step up of at least 5% and $0.50 from a price that held (2+ charges within 0.5% or $0.10 of each other), seen in the last 3 charges | new amount in cents |
+| `price-up` | fixed amount; a step up of at least 5% and $0.50 from a price that held (2+ charges within 0.5% or $0.10 of each other), seen in the last 3 charges. The row's `typical` and `monthly` are the new price, even after the flag is dismissed | new amount in cents |
 | `new` | first charge within 90 days of as-of | first date |
 | `stopped` | as-of is more than 1.5 periods + 3 days past the last charge | last date |
 
@@ -158,9 +184,12 @@ Snapshot gains `subscriptionMarks: SubscriptionMark[]`. Rules:
 panel: panels are read-only and this card writes marks). Placed under the panel
 grid; hidden when nothing is found.
 
-- Header: "Recurring charges", "≈ $X a month across N" (active rows with a
-  cadence only), then "Plus N tagged with no schedule yet, not in the total"
-  when there are rows with cadence `unknown`.
+- Header: "Recurring charges", "Found in your own transactions, on this
+  device."
+- One section per kind with rows, in the order Subscriptions, Bills, Other
+  recurring. Each has a heading and "About $X a month across N" (that kind's
+  total and its active rows with a cadence), then ", plus N with no schedule
+  yet, not in the total" when it has rows with cadence `unknown`.
 - One row per subscription: merchant (the name most of its lines carry),
   `monthly · $12.99` (with "from your Subscriptions tag" for a tagged one), last and next date,
   `≈ $/mo` ("No schedule yet" and "Not in total" for cadence `unknown`), flags as chips ("Up from $10.99", "New", "Seems to have stopped")
@@ -184,8 +213,12 @@ merchant or amount in argv or env. Merchant strings reach the page through
 list. Read-only open, stdout only, `tagged` shown beside the flags of a tagged
 series, control characters stripped from merchant
 names in the table (bank text could otherwise carry terminal escapes). Rows
-with cadence `unknown` are printed under their own heading, "Tagged, no
-schedule yet (not in the monthly total)", and counted apart in the summary.
+are printed in one section per kind that has any (`Subscriptions`, `Bills`,
+`Other recurring`), each ending in `<Heading>: about $X a month across N.`
+Inside a section, rows with cadence `unknown` follow under "Tagged, no
+schedule yet (not in the monthly total)". A last line counts active, stopped,
+unscheduled, and hidden rows. `--json` prints the result as is, so each row
+carries `kind` and the result carries `totals`.
 
 ## Test plan
 
@@ -200,7 +233,10 @@ schedule yet (not in the monthly total)", and counted apart in the summary.
   months listed whatever its cadence with each tagged charge in exactly one
   row, per-charge reference codes, a short-link domain shared with a brand,
   a cut-off domain, unscheduled tagged charges kept out of the total and
-  promoted by a second charge on schedule, and no transaction in two rows.
+  promoted by a second charge on schedule, no transaction in two rows; each
+  kind from the newest categorized charge with a total per kind, hidden rows
+  in no total, and a price rise moving the monthly cost to the new price while
+  a variable bill keeps its median.
 - `scripts/ledger-db.test.mjs`: marks round-trip; absent key keeps them; `[]`
   clears; bad kind / long key refused; a ledger created by the previous schema
   (no table) reads as `[]` and gains the table on its first write; the
@@ -210,7 +246,9 @@ schedule yet (not in the monthly total)", and counted apart in the summary.
 - `scripts/ledger-api.test.mjs`: `PUT` with bad marks → 400; shell injection
   with `$'` in a description stays inert.
 - `scripts/omakei-subscriptions.test.mjs`: CLI reads read-only, prints JSON,
-  labels a tagged series, lists unscheduled tagged rows apart from the total.
+  labels a tagged series, lists unscheduled tagged rows apart from the total,
+  prints a section and subtotal per kind, and carries `kind` and `totals` in
+  the JSON.
 
 ## Tuned on real data
 
@@ -233,6 +271,12 @@ keyed on the link and one on the brand, so its cost was counted twice. One-off
 tagged charges were assumed monthly and raised the total by about a quarter.
 The reference-code rule, the short-link rule, the `www.` rule, and cadence
 `unknown` came from it.
+
+A fourth run (2026-10) gave one total that mixed subscriptions with a car
+loan, insurance, a phone bill, and child care, which the user had filed under
+`debt`, `insurance`, `utilities`, and `childcare`. A plan that rose after
+eight months at one price was costed at the old price, so the total ran low.
+The kind, the per-kind totals, and the new price after a rise came from it.
 
 ## Open Questions
 

@@ -19,6 +19,15 @@ export type Cadence = "weekly" | "monthly" | "yearly";
  */
 export type Confidence = "schedule" | "tagged";
 
+/**
+ * What a recurring charge is to the user, read off the category they filed it
+ * under: a plan they chose, a bill they owe, or neither said.
+ */
+export type SubscriptionKind = "subscription" | "bill" | "other";
+
+/** The order the kinds are shown in. */
+export const SUBSCRIPTION_KINDS: readonly SubscriptionKind[] = ["subscription", "bill", "other"];
+
 export type FlagKind = "price-up" | "new" | "stopped";
 
 export type MarkKind = "not-subscription" | FlagKind;
@@ -50,8 +59,12 @@ export interface SubscriptionFlag {
 interface SubscriptionBase {
   key: string;
   merchant: string;
+  kind: SubscriptionKind;
   confidence: Confidence;
-  /** Median of the last three charges, as a positive number. */
+  /**
+   * What the next charge should be, as a positive number: the new price after
+   * a price rise, otherwise the median of the last three charges.
+   */
   typical: number;
   /** The amount moves from charge to charge, like a utility bill. */
   variable: boolean;
@@ -88,6 +101,8 @@ export interface SubscriptionResult {
   subscriptions: Subscription[];
   /** Marked "not a subscription" by the user. */
   hidden: Subscription[];
+  /** Monthly cost of each kind's listed rows that have a cadence and have not stopped. */
+  totals: Record<SubscriptionKind, number>;
   /** The date "new" and "stopped" were judged against. */
   asOf: string;
 }
@@ -95,14 +110,19 @@ export interface SubscriptionResult {
 /** Everyday buying, not bills: a weekly grocery run is not a subscription. */
 const NOT_BILLS = new Set(["groceries", "dining", "coffee"]);
 
-/**
- * Where an amount that moves every month is still one bill. A salon visited
- * about monthly is regular too, but it is not a bill; an electric bill is.
- */
-const VARIABLE_BILLS = new Set(["utilities", "insurance", "housing", "debt", "childcare"]);
-
 /** The user's own word that a charge is a subscription. */
 const TAGGED = "subscriptions";
+
+/** Categories that say what a charge is. Any other category, or none, is "other". */
+const KIND_OF_CATEGORY = new Map<string, SubscriptionKind>([
+  [TAGGED, "subscription"],
+  ["housing", "bill"],
+  ["utilities", "bill"],
+  ["insurance", "bill"],
+  ["debt", "bill"],
+  ["childcare", "bill"],
+  ["fees", "bill"],
+]);
 
 type Band = { cadence: Cadence; min: number; max: number; days: number; minCount: number };
 
@@ -303,6 +323,15 @@ function priceRise(amounts: number[]): SubscriptionFlag | null {
   return { kind: "price-up", ref: String(Math.round(now * 100)), from: round2(before) };
 }
 
+/** The kind the user's latest word on these charges gives: the newest charge with a category. */
+function kindOf(sorted: Charge[]): SubscriptionKind {
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const category = sorted[i]!.categoryId;
+    if (category) return KIND_OF_CATEGORY.get(category) ?? "other";
+  }
+  return "other";
+}
+
 /**
  * How a series is judged. "schedule": the charges must repeat on one.
  * "tagged": the user has already said they are a subscription, and the latest
@@ -337,9 +366,10 @@ function seriesOf(
   let steady = 0;
   for (let i = 1; i < amounts.length; i++) if (closeEnough(amounts[i]!, amounts[i - 1]!)) steady++;
   const variable = steady / (amounts.length - 1) < REGULAR_SHARE;
+  const kind = kindOf(sorted);
   if (variable && band && confidence === "schedule") {
     if (band.cadence !== "monthly" || sorted.length < VARIABLE_MIN_COUNT) return null;
-    if (!VARIABLE_BILLS.has(lastCharge.categoryId ?? "")) return null;
+    if (kind !== "bill") return null;
   }
 
   const lastDay = dayNumber(lastCharge.date);
@@ -349,12 +379,9 @@ function seriesOf(
   const history = tagged ? Math.max(periods, TAGGED_HISTORY_DAYS) : periods;
   if (idle > history) return null;
 
-  const typical = round2(median(amounts.slice(-3)));
-  const flags: SubscriptionFlag[] = [];
-  if (!variable) {
-    const flag = priceRise(amounts);
-    if (flag) flags.push(flag);
-  }
+  const rise = variable ? null : priceRise(amounts);
+  const typical = round2(rise ? lastCharge.amount : median(amounts.slice(-3)));
+  const flags: SubscriptionFlag[] = rise ? [rise] : [];
   const firstDate = sorted[0]!.date;
   if (asOfDay - dayNumber(firstDate) <= NEW_DAYS) flags.push({ kind: "new", ref: firstDate });
   const stopped = band !== null && idle > band.days * 1.5 + 3;
@@ -363,6 +390,7 @@ function seriesOf(
   const base = {
     key,
     merchant: nameOf(sorted, key),
+    kind,
     confidence,
     typical,
     variable,
@@ -449,7 +477,7 @@ export function findSubscriptions(
   }
 
   const asOf = options.today && options.today < latest ? options.today : latest;
-  if (!asOf) return { subscriptions: [], hidden: [], asOf: "" };
+  if (!asOf) return { subscriptions: [], hidden: [], totals: totalsOf([]), asOf: "" };
   const asOfDay = dayNumber(asOf);
 
   const found: Subscription[] = [];
@@ -504,14 +532,20 @@ export function findSubscriptions(
   const rank = (s: Subscription) => (s.stopped ? 2 : s.monthly === null ? 1 : 0);
   const order = (a: Subscription, b: Subscription) =>
     rank(a) - rank(b) || (b.monthly ?? 0) - (a.monthly ?? 0) || a.key.localeCompare(b.key);
-  return { subscriptions: subscriptions.sort(order), hidden: hidden.sort(order), asOf };
+  return {
+    subscriptions: subscriptions.sort(order),
+    hidden: hidden.sort(order),
+    totals: totalsOf(subscriptions),
+    asOf,
+  };
 }
 
-/** Total monthly cost of what is still running and has a cadence. */
-export function monthlyTotal(subscriptions: readonly Subscription[]): number {
-  return round2(
-    subscriptions.filter((s) => !s.stopped).reduce((sum, s) => sum + (s.monthly ?? 0), 0),
-  );
+function totalsOf(listed: readonly Subscription[]): Record<SubscriptionKind, number> {
+  const totals = { subscription: 0, bill: 0, other: 0 };
+  for (const s of listed) {
+    if (!s.stopped && s.monthly !== null) totals[s.kind] = round2(totals[s.kind] + s.monthly);
+  }
+  return totals;
 }
 
 /** Marks as read from the ledger, which may hold anything. Bad entries are dropped. */
