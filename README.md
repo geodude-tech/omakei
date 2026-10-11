@@ -144,6 +144,23 @@ Each card on the dashboard is one file in `src/panels/`. If an answer is worth s
 
 This needs a clone of the repository rather than a plugin install, because panels are compiled into the bundle. See [`src/panels/README.md`](src/panels/README.md) for the contract, and `npm run build` after adding one.
 
+## Using Omakei with an AI agent
+
+The rules an agent follows when it uses Omakei are in [`docs/agent-skill/SKILL.md`](docs/agent-skill/SKILL.md). Every install has the file at `~/.config/omarchy/plugins/omakei/docs/agent-skill/SKILL.md`. It tells the agent to answer from Omakei's own commands, keep the ledger on this computer, back up before a write, and ask before it changes anything.
+
+The skill is opt-in. No agent loads it until you point the agent at it. To use it with Grok Bot or another agent, tell the agent:
+
+> Follow `~/.config/omarchy/plugins/omakei/docs/agent-skill/SKILL.md` when you work with my Omakei ledger.
+
+If your agent loads skills from a folder, you can link the skill into that folder yourself. That choice is yours to make on your own machine. For example, for Claude Code:
+
+```sh
+mkdir -p ~/.claude/skills
+ln -s ~/.config/omarchy/plugins/omakei/docs/agent-skill ~/.claude/skills/omakei
+```
+
+`omarchy plugin update omakei` updates the skill with the rest of the plugin. Your own category rules, pins, and "not recurring" marks stay in your ledger, not in the skill.
+
 ## Your data
 
 Statements stay in the folder you attached; the generated ledger is kept in a directory only your user can open (`~/.local/state/omakei/ledgers/`, mode 0700). Removing the plugin deletes neither. A ledger left in the attached folder by an older version is copied there once and then left alone. There is no account, no cloud, and no telemetry.
@@ -181,7 +198,8 @@ gitignored, so development never reads or rewrites the real ones.
 [`docs/agents.md`](docs/agents.md) is the tour of how the repository fits
 together and why — worth reading, or handing to an agent, before a first change.
 It sits under `docs/` rather than at the root so that installing the plugin does
-not leave discoverable agent instructions on your machine.
+not leave discoverable agent instructions on your machine. The agent skill sits
+under `docs/` for the same reason.
 
 ## License
 
