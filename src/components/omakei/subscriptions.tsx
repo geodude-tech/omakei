@@ -14,7 +14,12 @@ import {
 import type { Transaction } from "@/lib/finance/types";
 import { formatDay, formatMoney, todayIso } from "@/lib/utils";
 
-const CADENCE_LABEL = { weekly: "Weekly", monthly: "Monthly", yearly: "Yearly" } as const;
+const CADENCE_LABEL = {
+  weekly: "Weekly",
+  monthly: "Monthly",
+  yearly: "Yearly",
+  unknown: "No schedule yet",
+} as const;
 
 function flagLabel(flag: SubscriptionFlag): string {
   switch (flag.kind) {
@@ -50,7 +55,8 @@ export function SubscriptionsCard({ transactions }: { transactions: Transaction[
 
   if (subscriptions.length === 0 && hidden.length === 0) return null;
 
-  const active = subscriptions.filter((s) => !s.stopped);
+  const active = subscriptions.filter((s) => !s.stopped && s.cadence !== "unknown");
+  const unscheduled = subscriptions.filter((s) => s.cadence === "unknown").length;
   const total = monthlyTotal(subscriptions);
 
   function notASubscription(sub: Subscription) {
@@ -80,6 +86,9 @@ export function SubscriptionsCard({ transactions }: { transactions: Transaction[
           ) : (
             "Nothing recurring right now."
           )}{" "}
+          {unscheduled > 0
+            ? `Plus ${unscheduled} tagged with no schedule yet, not in the total. `
+            : ""}
           Found in your own transactions, on this device.
         </p>
       </CardHeader>
@@ -99,7 +108,7 @@ export function SubscriptionsCard({ transactions }: { transactions: Transaction[
                   {formatMoney(sub.typical)}
                 </span>{" "}
                 · last {formatDay(sub.lastDate)}
-                {sub.stopped ? "" : ` · next ${formatDay(sub.nextDate)}`}
+                {sub.nextDate && !sub.stopped ? ` · next ${formatDay(sub.nextDate)}` : ""}
               </p>
               {sub.flags.length > 0 ? (
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -128,8 +137,14 @@ export function SubscriptionsCard({ transactions }: { transactions: Transaction[
               ) : null}
             </div>
             <p className="text-sm tabular-nums sm:w-28 sm:text-right">
-              {formatMoney(sub.monthly)}
-              <span className="text-xs text-muted-foreground"> /mo</span>
+              {sub.monthly === null ? (
+                <span className="text-xs text-muted-foreground">Not in total</span>
+              ) : (
+                <>
+                  {formatMoney(sub.monthly)}
+                  <span className="text-xs text-muted-foreground"> /mo</span>
+                </>
+              )}
             </p>
             <Button variant="ghost" size="sm" onClick={() => notASubscription(sub)}>
               Not a subscription

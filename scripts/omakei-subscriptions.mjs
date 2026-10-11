@@ -72,17 +72,34 @@ export async function run(
     return 0;
   }
   const width = Math.min(32, Math.max(...subscriptions.map((s) => printable(s.merchant).length)));
+  const name = (s) => printable(s.merchant).slice(0, 32).padEnd(width);
+  const notes = (s, extra) => {
+    const all = [...extra, ...s.flags.map(flagText)];
+    return all.length ? `  [${all.join(", ")}]` : "";
+  };
+  const unscheduled = subscriptions.filter((s) => s.cadence === "unknown");
   for (const s of subscriptions) {
-    const notes = [...(s.confidence === "tagged" ? ["tagged"] : []), ...s.flags.map(flagText)];
-    const flags = notes.length ? `  [${notes.join(", ")}]` : "";
+    if (s.cadence === "unknown") continue;
     out.write(
-      `${printable(s.merchant).slice(0, 32).padEnd(width)}  ${s.cadence.padEnd(7)}  ${money(s.typical).padStart(9)}  ` +
-        `${money(s.monthly).padStart(9)}/mo  last ${s.lastDate}${s.stopped ? "" : `  next ${s.nextDate}`}${flags}\n`,
+      `${name(s)}  ${s.cadence.padEnd(7)}  ${money(s.typical).padStart(9)}  ` +
+        `${money(s.monthly).padStart(9)}/mo  last ${s.lastDate}${s.stopped ? "" : `  next ${s.nextDate}`}` +
+        `${notes(s, s.confidence === "tagged" ? ["tagged"] : [])}\n`,
     );
   }
-  const active = subscriptions.filter((s) => !s.stopped).length;
+  if (unscheduled.length) {
+    out.write("\nTagged, no schedule yet (not in the monthly total):\n");
+    for (const s of unscheduled) {
+      out.write(
+        `${name(s)}  ${money(s.typical).padStart(9)}  ${s.count} ${s.count === 1 ? "charge" : "charges"}  ` +
+          `last ${s.lastDate}${notes(s, [])}\n`,
+      );
+    }
+  }
+  const active = subscriptions.filter((s) => !s.stopped && s.cadence !== "unknown").length;
+  const stopped = subscriptions.filter((s) => s.stopped).length;
+  const waiting = unscheduled.length ? `${unscheduled.length} tagged with no schedule yet, ` : "";
   out.write(
-    `\n${active} active, ${subscriptions.length - active} stopped, ${hidden.length} marked not a subscription; ` +
+    `\n${active} active, ${stopped} stopped, ${waiting}${hidden.length} marked not a subscription; ` +
       `about ${money(monthlyTotal(subscriptions))} a month (as of ${asOf}).\n`,
   );
   return 0;

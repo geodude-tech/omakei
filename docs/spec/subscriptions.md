@@ -35,16 +35,29 @@ Pure function in `src/lib/finance/subscriptions.ts`.
    check (`isGenericMerchant`), not ATM cash, and not in a category that is
    everyday buying rather than a bill: `groceries`, `dining`, `coffee`.
 2. **Merchant key.** `subscriptionKey(description)`: if the line holds a web
-   domain (`.com`, `.co`, `.net`, `.org`, `.io`, `.tv`, `.app`), the key is the
+   domain (`.com`, `.co`, `.net`, `.org`, `.io`, `.tv`, `.app`, or anything
+   after `www.`, so a cut-off `WWW.ZORPY.COMPA` counts), the key is the
    domain's name: `ZFX*ZORPFLIXPLUS zorpflix.com/billCA` and `ZORPFLIX` are both
-   `zorpflix`, and `B9QX771K b.co/paysupport#CA` shares `b` with the other lines
-   that carry the same help URL. A processor prefix or billing code in front of
-   the domain changes from line to line; the domain does not. Otherwise drop dates
+   `zorpflix`. A processor prefix or billing code in front of the domain changes
+   from line to line; the domain does not. Otherwise drop dates
    (`10/05`, `2026-10-05`), masked card numbers (`XXXX1234`, `*1234`,
-   `CARD 1234`), and `#` codes, then the existing `extractMerchant`
-   (store numbers, phone, city and state, `SQ *`/`PAYPAL *` prefixes), then
-   lower-case, squash spaces, and drop a leading `www` and trailing `com` /
-   `net` / `org` / `io` (`NETFLIX.COM` and `NETFLIX INC` are one key). One key per merchant however its lines vary.
+   `CARD 1234`), `#` codes, and reference codes (below), then the existing
+   `extractMerchant` (store numbers, phone, city and state, `SQ *`/`PAYPAL *`
+   prefixes), then lower-case, squash spaces, and drop a leading `www` and
+   trailing `com` / `net` / `org` / `io` (`NETFLIX.COM` and `NETFLIX INC` are
+   one key). One key per merchant however its lines vary.
+   - **Reference codes.** A processor often puts a new code on every charge:
+     `ZORBTIME*4QJ7X2M9P`, then `ZORBTIME*R8T3W6Z1K 800-555-0142 WA`. A token of
+     six or more letters and digits, with at least two digits and a digit
+     between two letters, is such a code and is dropped. `extractMerchant`
+     drops it too, so the "Needs a category" list and category rules no
+     longer split on it. A brand with one digit (`ZORP4KIDS`) is kept.
+   - **Short links.** A one- or two-letter domain (`b.co`) is a short link
+     that names no merchant. The key is the brand in front of it:
+     `BLORPIFY *Blorpify Drive b.co/paysupport#CA` is `blorpify`, like
+     `Blorpify Drive`. A line with only a code in front (`B9QX771K
+     b.co/paysupport#CA`) joins the one brand the other lines with that link
+     name. If they name two brands or none, it keys on the link (`b`).
 3. **Cadence.** Sort a key's charges by date and take the median gap in days:
 
    | cadence | median gap | period | at least |
@@ -68,18 +81,27 @@ Pure function in `src/lib/finance/subscriptions.ts`.
    above the band's first) and each band is tried on its own, so a $0.99 and a
    $10.99 plan from one app store are two subscriptions. A band must be one
    price (every charge within 3% or $0.50 of its median), so a busy store's
-   receipts cannot line up into a fake plan. The band key is
-   `<merchant>|<typical dollars>`.
+   receipts cannot line up into a fake plan. When a merchant has more than one
+   row, each row's key is `<merchant>|<typical dollars>`, or
+   `<merchant>|unknown` for the row of step 6 with no cadence.
 6. **Tagged by the user.** A charge in the `subscriptions` category is the
    user saying "this is a subscription", and no rule above may drop it. After
    steps 3–5, the tagged charges of a key that no listed series holds are split
    into amount bands (step 5, without the one-price check), and every band is
-   listed with `confidence: "tagged"`. A tagged band needs no minimum count
-   and no schedule: its cadence is the band that fits its latest gap, or
-   monthly when it has one charge or the gap fits none. Variable amounts are
-   allowed. Series found by steps 3–5 have `confidence: "schedule"`.
+   listed with `confidence: "tagged"`. A tagged band needs no minimum count:
+   its cadence is the band (table above, not twice it) that holds its latest
+   gap, so a second charge at that price one period after the first makes it
+   monthly. A band with one charge, or whose latest gap fits no band, has no
+   cadence yet. All such charges of one merchant, whatever their prices, are
+   one row with `cadence: "unknown"`, so three one-off audiobook credits are
+   one row, not three. Variable amounts are allowed. Series found by steps
+   3–5 have `confidence: "schedule"`.
 7. **Derived fields.** `nextDate` = last date + one period (month-end
    clamped). `monthly` = typical × 52/12 (weekly), × 1 (monthly), / 12 (yearly).
+   A row with cadence `unknown` has `nextDate` and `monthly` null, is never
+   stopped, and is not in the monthly total: the user said it is a
+   subscription, but not yet what it costs a month. `ids` lists the row's
+   transactions. No transaction is in two rows.
 8. **As of.** The comparison date is the latest transaction date in the ledger,
    capped at `today`. Statements imported three weeks ago must not make
    everything look stopped.
@@ -136,10 +158,12 @@ Snapshot gains `subscriptionMarks: SubscriptionMark[]`. Rules:
 panel: panels are read-only and this card writes marks). Placed under the panel
 grid; hidden when nothing is found.
 
-- Header: "Recurring charges", "≈ $X a month across N" (active ones only).
+- Header: "Recurring charges", "≈ $X a month across N" (active rows with a
+  cadence only), then "Plus N tagged with no schedule yet, not in the total"
+  when there are rows with cadence `unknown`.
 - One row per subscription: merchant (the name most of its lines carry),
   `monthly · $12.99` (with "from your Subscriptions tag" for a tagged one), last and next date,
-  `≈ $/mo`, flags as chips ("Up from $10.99", "New", "Seems to have stopped")
+  `≈ $/mo` ("No schedule yet" and "Not in total" for cadence `unknown`), flags as chips ("Up from $10.99", "New", "Seems to have stopped")
   each with a dismiss button, and a "Not a subscription" button.
 - "N hidden" toggles a list of hidden ones, each with "Restore".
 - Merchant text is rendered as React text only — never `innerHTML`.
@@ -159,7 +183,9 @@ merchant or amount in argv or env. Merchant strings reach the page through
 `node scripts/omakei-subscriptions.mjs [--json] [ledger-path]` prints the same
 list. Read-only open, stdout only, `tagged` shown beside the flags of a tagged
 series, control characters stripped from merchant
-names in the table (bank text could otherwise carry terminal escapes).
+names in the table (bank text could otherwise carry terminal escapes). Rows
+with cadence `unknown` are printed under their own heading, "Tagged, no
+schedule yet (not in the monthly total)", and counted apart in the summary.
 
 ## Test plan
 
@@ -170,8 +196,11 @@ names in the table (bank text could otherwise carry terminal escapes).
   irregular shopping not detected, transfers and checks ignored, marks hide and dismiss
   by ref, as-of capped by data; a bank line that changes shape mid-series, a
   billing code that shares a help URL, one missed month, tagged plans with one
-  or two charges or no schedule, and every tagged merchant in the last 13
-  months listed whatever its cadence.
+  or two charges or no schedule, every tagged merchant in the last 13
+  months listed whatever its cadence with each tagged charge in exactly one
+  row, per-charge reference codes, a short-link domain shared with a brand,
+  a cut-off domain, unscheduled tagged charges kept out of the total and
+  promoted by a second charge on schedule, and no transaction in two rows.
 - `scripts/ledger-db.test.mjs`: marks round-trip; absent key keeps them; `[]`
   clears; bad kind / long key refused; a ledger created by the previous schema
   (no table) reads as `[]` and gains the table on its first write; the
@@ -181,7 +210,7 @@ names in the table (bank text could otherwise carry terminal escapes).
 - `scripts/ledger-api.test.mjs`: `PUT` with bad marks → 400; shell injection
   with `$'` in a description stays inert.
 - `scripts/omakei-subscriptions.test.mjs`: CLI reads read-only, prints JSON,
-  labels a tagged series.
+  labels a tagged series, lists unscheduled tagged rows apart from the total.
 
 ## Tuned on real data
 
@@ -197,6 +226,14 @@ several app-store plans with only one or two charges. Three rules came from it:
 the domain key, the missed-period gap, and the tagged pass with its 13-month
 history.
 
+A third run (2026-10) listed every tagged merchant but got the rows wrong. A
+plan billed with a new reference code each month came out as nine one-charge
+rows. A storage plan billed through a short link was two active rows, one
+keyed on the link and one on the brand, so its cost was counted twice. One-off
+tagged charges were assumed monthly and raised the total by about a quarter.
+The reference-code rule, the short-link rule, the `www.` rule, and cadence
+`unknown` came from it.
+
 ## Open Questions
 
 1. **Bar widget.** A "≈ $X/mo recurring · 1 flagged" line in the popup would
@@ -206,6 +243,7 @@ history.
 2. **Biweekly and quarterly** cadences are not detected. Add a band row if real
    data shows them. A tagged one is listed anyway, at the pace of its latest
    gap or monthly.
-3. **One tagged charge** is assumed monthly, so a yearly plan seen once reads
-   as stopped after about seven weeks. It stays listed until it is 13 months
-   old.
+3. **One tagged charge** has cadence `unknown` until a second charge at its
+   price comes one period later. A plan that bills every six or seven weeks
+   stays `unknown`, and out of the total, until a band for it exists. It stays
+   listed until it is 13 months old.
