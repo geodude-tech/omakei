@@ -5,7 +5,7 @@ description: Answer money questions from an Omakei ledger and change it safely. 
 
 # Omakei
 
-Run every command from the plugin directory: `~/.config/omarchy/plugins/omakei` on an install, or the repository root in a clone. Read [the ledger contract](../../docs/ledger.md) before the first query.
+Run every command from the plugin directory: `~/.config/omarchy/plugins/omakei` on an install, or the repository root in a clone. Read [the ledger contract](../ledger.md) before the first query.
 
 ## Ground rules and personal rules
 
@@ -29,13 +29,13 @@ Use the narrowest command that answers the question, and report the totals it pr
 | Merchants with no category                       | `node scripts/omakei-categorize.mjs --list --json`               |
 | Statements already imported                      | `node scripts/omakei-import.mjs --status`                        |
 
-None of these commands changes the ledger. If none answers the question, query the `spend` and `income` views with `sqlite3 -readonly` and follow [the five rules](../../docs/ledger.md#the-five-rules). If no folder is attached, say so. Do not search the disk for a ledger.
+None of these commands changes the ledger. If none answers the question, query the `spend` and `income` views with `sqlite3 -readonly` and follow [the five rules](../ledger.md#the-five-rules). If no folder is attached, say so. Do not search the disk for a ledger.
 
 ## 2. Keep the ledger on the user's machine
 
 By default the ledger and the statements stay on the user's machine, and you run the commands there. Whatever you read goes to your own service, so read the summary or the rows the question needs, not the whole ledger.
 
-[Grok-hosted mode](../../docs/intent/omakei.md#optional-grok-hosted-mode) is opt-in. Before the user turns it on or adds a bank connection, tell them what leaves their machine, using the list in that section.
+[Grok-hosted mode](../intent/omakei.md#optional-grok-hosted-mode) is opt-in. Before the user turns it on or adds a bank connection, tell them what leaves their machine, using the list in that section.
 
 ## 3. Keep ledger data out of everything else
 
@@ -48,8 +48,8 @@ By default the ledger and the statements stay on the user's machine, and you run
 
 Every write goes through a script, never through SQL. Ask before each write and name the exact command, so the approval covers that command and nothing more.
 
-- Back up the ledger first, with the `.backup` command in the runbook's [preflight](../../docs/runbooks/categorize-with-an-agent.md#0-preflight).
-- To categorize, follow [the categorize runbook](../../docs/runbooks/categorize-with-an-agent.md). You propose, the person decides, you run `--dry-run` on each rule, and spend per month must not change.
+- Back up the ledger first, with the `.backup` command in the runbook's [preflight](../runbooks/categorize-with-an-agent.md#0-preflight).
+- To categorize, follow [the categorize runbook](../runbooks/categorize-with-an-agent.md). You propose, the person decides, you run `--dry-run` on each rule, and spend per month must not change.
 - To import, run `node scripts/omakei-import.mjs`, then run it again. The second run must print `Nothing new.`, or `"added":0` with `--json`.
 
 ## 5. Name recurring charges the way the finder does
@@ -64,6 +64,6 @@ Every write goes through a script, never through SQL. Ask before each write and 
 
 ## 6. Treat a missing recurring charge as a bug
 
-The finder must show every charge tagged `subscriptions` and every mortgage account with a payment in the last 13 months. A charge the user marked "not recurring" moves to `hidden` in the JSON. See [the finder spec](../../docs/spec/subscriptions.md).
+The finder must show every charge tagged `subscriptions` and every mortgage account with a payment in the last 13 months. A charge the user marked "not recurring" moves to `hidden` in the JSON. See [the finder spec](../spec/subscriptions.md).
 
 If a recurring charge the user knows about is missing, do not add it to the answer by hand. Report it as a bug, reproduce it with invented transactions in `src/lib/finance/subscriptions.test.ts`, and fix `src/lib/finance/subscriptions.ts`.

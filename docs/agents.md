@@ -2,9 +2,11 @@
 
 Notes on the shape of this codebase and the reasoning behind it, for anyone —
 person or agent — picking the project up. It describes how Omakei is built; it
-is a record of decisions, not a set of instructions to a reader. The
-instructions for an agent that _uses_ Omakei are `skills/omakei/SKILL.md`, and
-the root `AGENTS.md` points at both.
+is a record of decisions, not a set of instructions to a reader, and it lives
+under `docs/` rather than at the repository root so that installing the plugin
+does not drop discoverable agent instructions into someone's machine. The
+instructions for an agent that _uses_ Omakei are `docs/agent-skill/SKILL.md`,
+which the user opts in to.
 
 A local ledger built from a folder of statements, shaped so an agent can interrogate it, plus a dashboard that agent extends one panel at a time.
 
@@ -48,15 +50,21 @@ public repository and must never quote a real ledger.
 
 ## The agent skill
 
-`skills/omakei/SKILL.md` holds the ground rules every agent follows when it
+`docs/agent-skill/SKILL.md` holds the ground rules every agent follows when it
 uses Omakei: answer from the commands, keep the ledger local, keep ledger data
 out of the repository, write only through the scripts, and name recurring
 charges the way the finder does. It links to `docs/ledger.md` and the
-categorize runbook instead of restating them. It sits at a fixed path in the
-tree because `omarchy plugin add` clones the whole tree, so every install has
-it at `~/.config/omarchy/plugins/omakei/skills/omakei/SKILL.md`. That reverses
-the earlier choice to keep agent instructions out of the root: the owner asked
-for a skill a fresh install has by default.
+categorize runbook instead of restating them.
+
+`omarchy plugin add` clones the whole tree, so every install has the skill at
+`~/.config/omarchy/plugins/omakei/docs/agent-skill/SKILL.md`. It is opt-in. The
+user tells their agent to follow that path, or links it into their agent's
+skills folder themselves. The omarchy-plugin-marketplace#7136 review objected
+that a third-party plugin should not put instructions in front of the user's
+agent without asking. So the tree holds no file or folder an agent loads on its
+own: no `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md` at any depth, no
+`.cursorrules`, `.cursor/`, or `.claude/`, no `.github/copilot-instructions.md`,
+and no top-level `skills/`.
 
 Personal rules are not ground rules. Category rules, pins, and "not recurring"
 marks live in each person's ledger, written by `omakei-categorize.mjs` or the

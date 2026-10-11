@@ -1,7 +1,8 @@
 /**
- * `skills/omakei/SKILL.md` is what an agent follows on a fresh install, so a
- * renamed script, a dropped flag, a moved doc, or a changed category set has
- * to fail `npm test` instead of sending the agent down a dead path.
+ * `docs/agent-skill/SKILL.md` is what an agent follows once the user points it
+ * there, so a renamed script, a dropped flag, a moved doc, or a changed
+ * category set has to fail `npm test` instead of sending the agent down a dead
+ * path.
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -14,8 +15,7 @@ import { CATEGORIES } from "../src/lib/finance/categories.ts";
 import { findSubscriptions } from "../src/lib/finance/subscriptions.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const SKILL = join(ROOT, "skills/omakei/SKILL.md");
-const ENTRY_POINTS = [SKILL, join(ROOT, "AGENTS.md")];
+const SKILL = join(ROOT, "docs/agent-skill/SKILL.md");
 const skill = readFileSync(SKILL, "utf8");
 
 const codeSpans = (text) => [...text.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]);
@@ -38,27 +38,22 @@ const slug = (heading) =>
     .replace(/[^a-z0-9 -]/g, "")
     .replace(/ /g, "-");
 
-test("the skill's frontmatter has a name matching its folder and a description", () => {
+test("the skill's frontmatter has the name omakei and a description", () => {
   const fm = frontmatter(skill);
   assert.deepEqual(Object.keys(fm).sort(), ["description", "name"]);
   assert.equal(fm.name, "omakei");
   assert.ok(fm.description.length > 0 && fm.description.length <= 1024);
 });
 
-test("every link in the agent entry points resolves to a file and heading", () => {
-  for (const file of ENTRY_POINTS) {
-    const text = readFileSync(file, "utf8");
-    for (const [, target] of text.matchAll(/\]\(([^)]+)\)/g)) {
-      if (/^https?:/.test(target)) continue;
-      const [path, anchor] = target.split("#");
-      const abs = resolve(dirname(file), path);
-      assert.ok(existsSync(abs), `${file}: ${target} does not exist`);
-      if (!anchor) continue;
-      const headings = [...readFileSync(abs, "utf8").matchAll(/^#+ (.+)$/gm)].map((h) =>
-        slug(h[1]),
-      );
-      assert.ok(headings.includes(anchor), `${file}: ${target} names no heading`);
-    }
+test("every link in the skill resolves to a file and heading", () => {
+  for (const [, target] of skill.matchAll(/\]\(([^)]+)\)/g)) {
+    if (/^https?:/.test(target)) continue;
+    const [path, anchor] = target.split("#");
+    const abs = resolve(dirname(SKILL), path);
+    assert.ok(existsSync(abs), `${target} does not exist`);
+    if (!anchor) continue;
+    const headings = [...readFileSync(abs, "utf8").matchAll(/^#+ (.+)$/gm)].map((h) => slug(h[1]));
+    assert.ok(headings.includes(anchor), `${target} names no heading`);
   }
 });
 
