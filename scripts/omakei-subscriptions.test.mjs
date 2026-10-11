@@ -122,3 +122,13 @@ test("terminal escape sequences in a merchant name are not printed", async () =>
   // eslint-disable-next-line no-control-regex
   assert.doesNotMatch(text, /[\u0000-\u0008\u000b-\u001f\u007f]/);
 });
+
+test("a charge the user tagged as a subscription is listed and labelled tagged", async () => {
+  const dir = privateDir();
+  const transactions = [charge("z1", "2026-09-19", "ZORPWEAR RENTAL", -17.35, "subscriptions")];
+  await updateLedgerDb(dir, () => ({ version: 1, transactions, rules: [] }));
+  assert.match(
+    cli([dir]),
+    /^ZORPWEAR\s+monthly\s+\$17\.35\s+\$17\.35\/mo {2}last 2026-09-19 {2}next 2026-10-19 {2}\[tagged, new\]$/m,
+  );
+});

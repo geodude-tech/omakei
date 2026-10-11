@@ -6,6 +6,7 @@ import {
   nextDateAfter,
   parseSubscriptionMarks,
   subscriptionKey,
+  type Subscription,
   type SubscriptionMark,
 } from "./subscriptions.ts";
 import type { Transaction } from "./types.ts";
@@ -388,4 +389,276 @@ test("parseSubscriptionMarks keeps good marks and drops bad ones", () => {
     { key: "hulu", kind: "price-up", ref: "1299", createdAt: 0 },
   ]);
   assert.deepEqual(parseSubscriptionMarks(undefined), []);
+});
+
+const TAG = "subscriptions";
+
+function tagged(date: string, amount: number, description: string): Transaction {
+  return tx(date, -amount, description, TAG);
+}
+
+function brief(s: Subscription) {
+  return {
+    key: s.key,
+    cadence: s.cadence,
+    typical: s.typical,
+    count: s.count,
+    firstDate: s.firstDate,
+    lastDate: s.lastDate,
+    stopped: s.stopped,
+    confidence: s.confidence,
+  };
+}
+
+test("a plan whose bank line changes shape mid-series stays one subscription", () => {
+  const rows = [
+    tagged("2026-05-17", 11.47, "ZORPFLIX 800-555-0100 CA"),
+    tagged("2026-06-17", 11.47, "ZORPFLIX 800-555-0100 CA"),
+    tagged("2026-07-17", 11.48, "ZFX*ZORPFLIXPLUS zorpflix.com/billCA"),
+    tagged("2026-08-17", 11.48, "Zorpflix"),
+    tagged("2026-09-17", 11.48, "Zorpflix"),
+    ANCHOR,
+  ];
+  const { subscriptions } = findSubscriptions(rows, { today: "2026-09-30" });
+  assert.deepEqual(subscriptions.map(brief), [
+    {
+      key: "zorpflix",
+      cadence: "monthly",
+      typical: 11.48,
+      count: 5,
+      firstDate: "2026-05-17",
+      lastDate: "2026-09-17",
+      stopped: false,
+      confidence: "schedule",
+    },
+  ]);
+  assert.equal(subscriptions[0]!.merchant, "Zorpflix");
+});
+
+test("a processor prefix and a help URL key on the domain, not the first word", () => {
+  assert.equal(subscriptionKey("ZFX*ZORPFLIXPLUS zorpflix.com/billCA"), "zorpflix");
+  assert.equal(subscriptionKey("BLORP *Blorp Drive b.co/paysupport#CA"), "b");
+  assert.equal(subscriptionKey("B9QX771K b.co/paysupport#CA"), "b");
+  assert.equal(subscriptionKey("4410 ZAPP.COM/BILL FTM"), "zapp");
+  assert.equal(subscriptionKey("ZAPP.COM/BILL 800-555-0199 CA"), "zapp");
+  assert.equal(subscriptionKey("pay.quux.com 800-555-0123"), "quux");
+});
+
+test("a storage plan billed under a new code is the same plan, through its latest charge", () => {
+  const rows = [
+    ...["05", "06", "07", "08"].map((m) =>
+      tagged(`2026-${m}-11`, 3.25, "BLORP *Blorp Drive b.co/paysupport#CA"),
+    ),
+    tagged("2026-09-11", 3.25, "B9QX771K b.co/paysupport#CA"),
+    ANCHOR,
+  ];
+  const { subscriptions } = findSubscriptions(rows, { today: "2026-09-30" });
+  assert.deepEqual(subscriptions.map(brief), [
+    {
+      key: "b",
+      cadence: "monthly",
+      typical: 3.25,
+      count: 5,
+      firstDate: "2026-05-11",
+      lastDate: "2026-09-11",
+      stopped: false,
+      confidence: "schedule",
+    },
+  ]);
+  assert.equal(
+    subscriptions[0]!.merchant,
+    "BLORP *Blorp",
+    "named for most of its lines, not the odd one",
+  );
+});
+
+test("a monthly charge with one month missing is still monthly", () => {
+  const rows = [
+    ...["05", "06", "08", "09"].map((m) => tx(`2026-${m}-14`, -9.5, "QUUXCLOUD STORAGE")),
+    ANCHOR,
+  ];
+  const { subscriptions } = findSubscriptions(rows, { today: "2026-09-30" });
+  assert.deepEqual(subscriptions.map(brief), [
+    {
+      key: "quuxcloud",
+      cadence: "monthly",
+      typical: 9.5,
+      count: 4,
+      firstDate: "2026-05-14",
+      lastDate: "2026-09-14",
+      stopped: false,
+      confidence: "schedule",
+    },
+  ]);
+});
+
+test("every tagged plan at an app store is listed, however few its charges", () => {
+  const lines = ["ZAPP.COM/BILL", "4410 ZAPP.COM/BILL FTM", "ZAPP.COM/BILL 800-555-0199 CA"];
+  const at = (i: number) => lines[i % lines.length]!;
+  const rows = [
+    ...["2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12"].map((m, i) =>
+      tagged(`${m}-08`, 1.49, at(i)),
+    ),
+    ...["01", "02", "03", "04", "05", "06", "07", "08"].map((m, i) =>
+      tagged(`2026-${m}-22`, 6.2, at(i)),
+    ),
+    tagged("2026-02-06", 42.05, at(0)),
+    tagged("2026-03-09", 12.3, at(1)),
+    tagged("2026-08-27", 41.1, at(0)),
+    tagged("2026-09-27", 41.1, at(1)),
+    tagged("2026-09-26", 8.4, at(2)),
+  ];
+  const { subscriptions } = findSubscriptions(rows, { today: "2026-09-30" });
+  assert.deepEqual(subscriptions.map(brief), [
+    {
+      key: "zapp|41",
+      cadence: "monthly",
+      typical: 41.1,
+      count: 3,
+      firstDate: "2026-02-06",
+      lastDate: "2026-09-27",
+      stopped: false,
+      confidence: "tagged",
+    },
+    {
+      key: "zapp|8",
+      cadence: "monthly",
+      typical: 8.4,
+      count: 1,
+      firstDate: "2026-09-26",
+      lastDate: "2026-09-26",
+      stopped: false,
+      confidence: "tagged",
+    },
+    {
+      key: "zapp|6",
+      cadence: "monthly",
+      typical: 6.2,
+      count: 8,
+      firstDate: "2026-01-22",
+      lastDate: "2026-08-22",
+      stopped: false,
+      confidence: "schedule",
+    },
+    {
+      key: "zapp|12",
+      cadence: "monthly",
+      typical: 12.3,
+      count: 1,
+      firstDate: "2026-03-09",
+      lastDate: "2026-03-09",
+      stopped: true,
+      confidence: "tagged",
+    },
+    {
+      key: "zapp|1",
+      cadence: "monthly",
+      typical: 1.49,
+      count: 6,
+      firstDate: "2025-07-08",
+      lastDate: "2025-12-08",
+      stopped: true,
+      confidence: "schedule",
+    },
+  ]);
+});
+
+test("a tagged rental with two charges and an add-on lists both prices", () => {
+  const rows = [
+    tagged("2026-08-21", 88.2, "ZORPWEAR RENTAL"),
+    tagged("2026-09-19", 88.2, "ZORPWEAR RENTAL"),
+    tagged("2026-09-19", 17.35, "ZORPWEAR RENTAL"),
+    ANCHOR,
+  ];
+  const { subscriptions } = findSubscriptions(rows, { today: "2026-09-30" });
+  assert.deepEqual(subscriptions.map(brief), [
+    {
+      key: "zorpwear|88",
+      cadence: "monthly",
+      typical: 88.2,
+      count: 2,
+      firstDate: "2026-08-21",
+      lastDate: "2026-09-19",
+      stopped: false,
+      confidence: "tagged",
+    },
+    {
+      key: "zorpwear|17",
+      cadence: "monthly",
+      typical: 17.35,
+      count: 1,
+      firstDate: "2026-09-19",
+      lastDate: "2026-09-19",
+      stopped: false,
+      confidence: "tagged",
+    },
+  ]);
+  assert.deepEqual(subscriptions[0]!.flags, [{ kind: "new", ref: "2026-08-21" }]);
+});
+
+test("a tagged plan charged on no clear schedule is still listed", () => {
+  const rows = [
+    tagged("2026-06-12", 4.99, "BLORPBOOKS AUDIO"),
+    tagged("2026-08-02", 4.99, "BLORPBOOKS AUDIO"),
+    tagged("2026-09-20", 4.99, "BLORPBOOKS AUDIO"),
+    ANCHOR,
+  ];
+  const { subscriptions } = findSubscriptions(rows, { today: "2026-09-30" });
+  assert.deepEqual(subscriptions.map(brief), [
+    {
+      key: "blorpbooks",
+      cadence: "monthly",
+      typical: 4.99,
+      count: 3,
+      firstDate: "2026-06-12",
+      lastDate: "2026-09-20",
+      stopped: false,
+      confidence: "tagged",
+    },
+  ]);
+});
+
+test("two untagged charges are not a subscription, but two tagged ones are", () => {
+  const plain = [...monthly("2026-08", 2, 20, "ZORP SHOP"), ANCHOR];
+  assert.deepEqual(findSubscriptions(plain, { today: "2026-09-30" }).subscriptions, []);
+  const mine = plain.map((t) => (t === ANCHOR ? t : { ...t, categoryId: TAG }));
+  assert.deepEqual(
+    findSubscriptions(mine, { today: "2026-09-30" }).subscriptions.map((s) => s.key),
+    ["zorp shop"],
+  );
+});
+
+test("every merchant with a tagged charge in the last 13 months appears, whatever its cadence", () => {
+  const plans: Array<[string, string[]]> = [
+    ["ZORPA WEEKLY", ["2026-09-02", "2026-09-09", "2026-09-16", "2026-09-23"]],
+    ["ZORPB FORTNIGHT", ["2026-08-05", "2026-08-19", "2026-09-02", "2026-09-16"]],
+    ["ZORPC MONTHLY", ["2026-07-03", "2026-08-03", "2026-09-03"]],
+    ["ZORPD SIXWEEK", ["2026-06-01", "2026-07-13", "2026-08-24"]],
+    ["ZORPE QUARTER", ["2025-12-10", "2026-03-10", "2026-06-10", "2026-09-10"]],
+    ["ZORPF YEARLY", ["2025-10-15"]],
+    ["ZORPG ONCE", ["2026-09-28"]],
+    ["ZORPH LAPSED", ["2025-11-01", "2025-12-01", "2026-01-01"]],
+    ["ZORPI ERRATIC", ["2026-01-04", "2026-01-06", "2026-04-30", "2026-05-02", "2026-09-01"]],
+  ];
+  const rows = plans.flatMap(([name, dates], i) => dates.map((d) => tagged(d, 3 + i, name)));
+  const { subscriptions, hidden } = findSubscriptions([...rows, ANCHOR], {
+    today: "2026-09-30",
+    marks: [{ key: "zorpc monthly", kind: "not-subscription", ref: "", createdAt: 1 }],
+  });
+  const listed = new Set([...subscriptions, ...hidden].map((s) => s.key.split("|")[0]));
+  assert.deepEqual([...listed].sort(), [
+    "zorpa weekly",
+    "zorpb fortnight",
+    "zorpc monthly",
+    "zorpd sixweek",
+    "zorpe quarter",
+    "zorpf yearly",
+    "zorpg once",
+    "zorph lapsed",
+    "zorpi erratic",
+  ]);
+  assert.deepEqual(
+    hidden.map((s) => s.key),
+    ["zorpc monthly"],
+  );
 });
