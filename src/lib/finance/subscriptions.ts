@@ -12,6 +12,13 @@ import type { Transaction } from "./types.ts";
 
 export type Cadence = "weekly" | "monthly" | "yearly";
 
+/**
+ * Why a series is listed. "schedule": its charges repeat on a schedule.
+ * "tagged": the user filed its charges under Subscriptions, and there are too
+ * few of them, or they are too irregular, to show a schedule yet.
+ */
+export type Confidence = "schedule" | "tagged";
+
 export type FlagKind = "price-up" | "new" | "stopped";
 
 export type MarkKind = "not-subscription" | FlagKind;
@@ -44,6 +51,7 @@ export interface Subscription {
   key: string;
   merchant: string;
   cadence: Cadence;
+  confidence: Confidence;
   /** Median of the last three charges, as a positive number. */
   typical: number;
   /** The amount moves from charge to charge, like a utility bill. */
@@ -84,15 +92,16 @@ const NOT_BILLS = new Set(["groceries", "dining", "coffee"]);
  */
 const VARIABLE_BILLS = new Set(["utilities", "insurance", "housing", "debt", "childcare"]);
 
-const CADENCES: Array<{
-  cadence: Cadence;
-  min: number;
-  max: number;
-  days: number;
-  minCount: number;
-}> = [
+/** The user's own word that a charge is a subscription. */
+const TAGGED = "subscriptions";
+
+type Band = { cadence: Cadence; min: number; max: number; days: number; minCount: number };
+
+const MONTHLY: Band = { cadence: "monthly", min: 26, max: 35, days: 30.44, minCount: 3 };
+
+const CADENCES: Band[] = [
   { cadence: "weekly", min: 5, max: 9, days: 7, minCount: 4 },
-  { cadence: "monthly", min: 26, max: 35, days: 30.44, minCount: 3 },
+  MONTHLY,
   { cadence: "yearly", min: 350, max: 380, days: 365.25, minCount: 2 },
 ];
 
@@ -109,6 +118,7 @@ const STEADY_PCT = 0.005;
 const STEADY_FLOOR = 0.1;
 const PRICE_UP_WINDOW = 3;
 const NEW_DAYS = 90;
+const TAGGED_HISTORY_DAYS = 396;
 
 /* ------------------------------------------------------------ merchant key */
 
@@ -116,12 +126,18 @@ const DATES = /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g;
 const CARD_MASKS = /(?:\bx{2,}|\*+|#)\s*\d{4}\b|\bcard\s*(?:ending\s*(?:in\s*)?)?\d{4}\b/gi;
 const HASH_CODES = /#\s*\w+/g;
 const WEB_EDGES = /^www | (?:com|net|org|io)$/g;
+const DOMAIN =
+  /(?:^|[^a-z0-9-])([a-z0-9-]*[a-z][a-z0-9-]*)\.(?:com|co|net|org|io|tv|app)(?![a-z0-9])/i;
 
 /**
  * One key per merchant, whatever the bank put around its name: a date, a
- * masked card number, a store number, a phone number, a city.
+ * masked card number, a store number, a phone number, a city. A web domain in
+ * the line is the merchant's most stable name, so it wins over a processor
+ * prefix or billing code in front of it.
  */
 export function subscriptionKey(description: string): string {
+  const domain = DOMAIN.exec(description);
+  if (domain) return domain[1]!.toLowerCase();
   const cleaned = description
     .replace(DATES, " ")
     .replace(CARD_MASKS, " ")
@@ -176,6 +192,43 @@ function closeEnough(a: number, b: number): boolean {
 
 type Charge = { date: string; amount: number; description: string; categoryId: string | null };
 
+/** In the band, or twice it: one missed charge does not break a schedule. */
+function fits(gap: number, band: Band): boolean {
+  return (gap >= band.min && gap <= band.max) || (gap >= 2 * band.min && gap <= 2 * band.max);
+}
+
+function scheduleOf(gaps: number[], count: number): Band | null {
+  const gap = median(gaps);
+  const band = CADENCES.find((c) => gap >= c.min && gap <= c.max);
+  if (!band || count < band.minCount) return null;
+  const regular = gaps.filter((g) => fits(g, band)).length;
+  return regular / gaps.length < REGULAR_SHARE ? null : band;
+}
+
+/** A tagged series bills at the pace of its latest gap; one charge is taken as monthly. */
+function taggedPace(gaps: number[]): Band {
+  const latest = gaps[gaps.length - 1];
+  return (latest !== undefined && CADENCES.find((c) => fits(latest, c))) || MONTHLY;
+}
+
+/** The name most of its charges carry, so one odd billing line does not rename it. */
+function nameOf(sorted: Charge[], key: string): string {
+  const counts = new Map<string, number>();
+  for (const c of [...sorted].reverse()) {
+    const name = extractMerchant(c.description);
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  let best = key;
+  let most = 0;
+  for (const [name, n] of counts) {
+    if (name && n > most) {
+      best = name;
+      most = n;
+    }
+  }
+  return best;
+}
+
 function isCandidate(tx: Transaction): boolean {
   if (!tx || typeof tx.date !== "string" || typeof tx.description !== "string") return false;
   if (!(typeof tx.amount === "number" && tx.amount < 0)) return false;
@@ -209,33 +262,39 @@ function priceRise(amounts: number[]): SubscriptionFlag | null {
   return { kind: "price-up", ref: String(Math.round(now * 100)), from: round2(before) };
 }
 
-/** A recurring series, or null when these charges do not repeat on a schedule. */
-function seriesOf(key: string, charges: Charge[], asOfDay: number): Subscription | null {
+/**
+ * A recurring series, or null. On "schedule" the charges must repeat on one;
+ * on "tagged" the user has already said they are a subscription.
+ */
+function seriesOf(
+  key: string,
+  charges: Charge[],
+  asOfDay: number,
+  confidence: Confidence,
+): Subscription | null {
   const sorted = [...charges].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-  if (sorted.length < 2) return null;
+  if (sorted.length === 0) return null;
   const gaps: number[] = [];
   for (let i = 1; i < sorted.length; i++)
     gaps.push(dayNumber(sorted[i]!.date) - dayNumber(sorted[i - 1]!.date));
-  const gap = median(gaps);
-  const band = CADENCES.find((c) => gap >= c.min && gap <= c.max);
-  if (!band || sorted.length < band.minCount) return null;
-  const regular = gaps.filter((g) => g >= band.min && g <= band.max).length;
-  if (regular / gaps.length < REGULAR_SHARE) return null;
+  const band = confidence === "schedule" ? scheduleOf(gaps, sorted.length) : taggedPace(gaps);
+  if (!band) return null;
 
   const amounts = sorted.map((c) => c.amount);
   const lastCharge = sorted[sorted.length - 1]!;
   let steady = 0;
   for (let i = 1; i < amounts.length; i++) if (closeEnough(amounts[i]!, amounts[i - 1]!)) steady++;
   const variable = steady / (amounts.length - 1) < REGULAR_SHARE;
-  if (variable) {
+  if (variable && confidence === "schedule") {
     if (band.cadence !== "monthly" || sorted.length < VARIABLE_MIN_COUNT) return null;
     if (!VARIABLE_BILLS.has(lastCharge.categoryId ?? "")) return null;
   }
 
   const lastDay = dayNumber(lastCharge.date);
   const idle = asOfDay - lastDay;
-  // Long gone: history, not something to act on.
-  if (idle > band.days * 3) return null;
+  const tagged = sorted.some((c) => c.categoryId === TAGGED);
+  const history = tagged ? Math.max(band.days * 3, TAGGED_HISTORY_DAYS) : band.days * 3;
+  if (idle > history) return null;
 
   const typical = round2(median(amounts.slice(-3)));
   const flags: SubscriptionFlag[] = [];
@@ -256,8 +315,9 @@ function seriesOf(key: string, charges: Charge[], asOfDay: number): Subscription
         : typical;
   return {
     key,
-    merchant: extractMerchant(lastCharge.description) || key,
+    merchant: nameOf(sorted, key),
     cadence: band.cadence,
+    confidence,
     typical,
     variable,
     last: round2(lastCharge.amount),
@@ -324,13 +384,16 @@ export function findSubscriptions(
 
   const found: Subscription[] = [];
   for (const [key, charges] of groups) {
-    const whole = seriesOf(key, charges, asOfDay);
+    const whole = seriesOf(key, charges, asOfDay, "schedule");
     if (whole) {
       found.push(whole);
       continue;
     }
     const bands = bandsOf(charges);
-    if (bands.length < 2) continue;
+    const split = bands.length > 1;
+    const listed = (sub: Subscription) =>
+      found.push(split ? { ...sub, key: `${key}|${Math.round(sub.typical)}` } : sub);
+    const covered = new Set<Charge>();
     for (const band of bands) {
       // A band has to be one price, not a range a busy store's receipts
       // happen to fall into on a schedule.
@@ -339,8 +402,15 @@ export function findSubscriptions(
         band.some((c) => Math.abs(c.amount - mid) > Math.max(BAND_SPREAD * mid, BAND_SPREAD_FLOOR))
       )
         continue;
-      const sub = seriesOf(key, band, asOfDay);
-      if (sub) found.push({ ...sub, key: `${key}|${Math.round(sub.typical)}` });
+      const sub = seriesOf(key, band, asOfDay, "schedule");
+      if (!sub) continue;
+      listed(sub);
+      for (const c of band) covered.add(c);
+    }
+    const leftover = charges.filter((c) => c.categoryId === TAGGED && !covered.has(c));
+    for (const band of bandsOf(leftover)) {
+      const sub = seriesOf(key, band, asOfDay, "tagged");
+      if (sub) listed(sub);
     }
   }
 

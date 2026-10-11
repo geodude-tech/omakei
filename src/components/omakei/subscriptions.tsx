@@ -92,7 +92,8 @@ export function SubscriptionsCard({ transactions }: { transactions: Transaction[
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium">{sub.merchant}</p>
               <p className="text-xs text-muted-foreground">
-                {CADENCE_LABEL[sub.cadence]} ·{" "}
+                {CADENCE_LABEL[sub.cadence]}
+                {sub.confidence === "tagged" ? " (from your Subscriptions tag)" : ""} ·{" "}
                 <span className="tabular-nums">
                   {sub.variable ? "about " : ""}
                   {formatMoney(sub.typical)}

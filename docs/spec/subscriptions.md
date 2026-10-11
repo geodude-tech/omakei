@@ -34,7 +34,12 @@ Pure function in `src/lib/finance/subscriptions.ts`.
 1. **Candidates.** Money out (`amount < 0`) that is not a transfer, not a
    check (`isGenericMerchant`), not ATM cash, and not in a category that is
    everyday buying rather than a bill: `groceries`, `dining`, `coffee`.
-2. **Merchant key.** `subscriptionKey(description)`: drop dates
+2. **Merchant key.** `subscriptionKey(description)`: if the line holds a web
+   domain (`.com`, `.co`, `.net`, `.org`, `.io`, `.tv`, `.app`), the key is the
+   domain's name: `ZFX*ZORPFLIXPLUS zorpflix.com/billCA` and `ZORPFLIX` are both
+   `zorpflix`, and `B9QX771K b.co/paysupport#CA` shares `b` with the other lines
+   that carry the same help URL. A processor prefix or billing code in front of
+   the domain changes from line to line; the domain does not. Otherwise drop dates
    (`10/05`, `2026-10-05`), masked card numbers (`XXXX1234`, `*1234`,
    `CARD 1234`), and `#` codes, then the existing `extractMerchant`
    (store numbers, phone, city and state, `SQ *`/`PAYPAL *` prefixes), then
@@ -48,8 +53,10 @@ Pure function in `src/lib/finance/subscriptions.ts`.
    | monthly | 26–35 days | 1 calendar month | 3 charges |
    | yearly | 350–380 days | 1 calendar year | 2 charges |
 
-   At least 75% of the gaps must sit inside the band (one missed or doubled
-   month in eight passes; a store visited "about monthly" does not).
+   At least 75% of the gaps must fit the band. A gap fits when it is inside the
+   band or inside twice the band (52–70 days for monthly), so one missed charge
+   does not break a series. A store visited "about monthly" still fails: its
+   gaps wander outside both.
 4. **Amount.** Fixed if at least 75% of consecutive charges differ by no more
    than 15% (or $2) — so one price rise still reads as fixed. Otherwise
    variable — allowed only for a monthly bill category (`utilities`,
@@ -63,9 +70,17 @@ Pure function in `src/lib/finance/subscriptions.ts`.
    price (every charge within 3% or $0.50 of its median), so a busy store's
    receipts cannot line up into a fake plan. The band key is
    `<merchant>|<typical dollars>`.
-6. **Derived fields.** `nextDate` = last date + one period (month-end
+6. **Tagged by the user.** A charge in the `subscriptions` category is the
+   user saying "this is a subscription", and no rule above may drop it. After
+   steps 3–5, the tagged charges of a key that no listed series holds are split
+   into amount bands (step 5, without the one-price check), and every band is
+   listed with `confidence: "tagged"`. A tagged band needs no minimum count
+   and no schedule: its cadence is the band that fits its latest gap, or
+   monthly when it has one charge or the gap fits none. Variable amounts are
+   allowed. Series found by steps 3–5 have `confidence: "schedule"`.
+7. **Derived fields.** `nextDate` = last date + one period (month-end
    clamped). `monthly` = typical × 52/12 (weekly), × 1 (monthly), / 12 (yearly).
-7. **As of.** The comparison date is the latest transaction date in the ledger,
+8. **As of.** The comparison date is the latest transaction date in the ledger,
    capped at `today`. Statements imported three weeks ago must not make
    everything look stopped.
 
@@ -81,7 +96,11 @@ later one shows again.
 | `stopped` | as-of is more than 1.5 periods + 3 days past the last charge | last date |
 
 A series stopped for more than three periods (weekly 21 days, monthly 3
-months, yearly 3 years) is history and is not listed at all.
+months, yearly 3 years) is history and is not listed at all, unless it holds a
+tagged charge: then it is listed, as stopped, until its last charge is more
+than 13 months (396 days) old or three periods, whichever is longer. So every
+merchant with a `subscriptions` charge in the last 13 months is in the result,
+in `subscriptions` or, if marked "not a subscription", in `hidden`.
 
 ## Data model
 
@@ -118,7 +137,8 @@ panel: panels are read-only and this card writes marks). Placed under the panel
 grid; hidden when nothing is found.
 
 - Header: "Recurring charges", "≈ $X a month across N" (active ones only).
-- One row per subscription: merchant, `monthly · $12.99`, last and next date,
+- One row per subscription: merchant (the name most of its lines carry),
+  `monthly · $12.99` (with "from your Subscriptions tag" for a tagged one), last and next date,
   `≈ $/mo`, flags as chips ("Up from $10.99", "New", "Seems to have stopped")
   each with a dismiss button, and a "Not a subscription" button.
 - "N hidden" toggles a list of hidden ones, each with "Restore".
@@ -137,7 +157,8 @@ merchant or amount in argv or env. Merchant strings reach the page through
 ## Terminal
 
 `node scripts/omakei-subscriptions.mjs [--json] [ledger-path]` prints the same
-list. Read-only open, stdout only, control characters stripped from merchant
+list. Read-only open, stdout only, `tagged` shown beside the flags of a tagged
+series, control characters stripped from merchant
 names in the table (bank text could otherwise carry terminal escapes).
 
 ## Test plan
@@ -147,7 +168,10 @@ names in the table (bank text could otherwise carry terminal escapes).
   long-stopped dropped, noisy merchant names, two plans at one merchant,
   variable bill, a variable salon visit not detected, groceries / coffee /
   irregular shopping not detected, transfers and checks ignored, marks hide and dismiss
-  by ref, as-of capped by data.
+  by ref, as-of capped by data; a bank line that changes shape mid-series, a
+  billing code that shares a help URL, one missed month, tagged plans with one
+  or two charges or no schedule, and every tagged merchant in the last 13
+  months listed whatever its cadence.
 - `scripts/ledger-db.test.mjs`: marks round-trip; absent key keeps them; `[]`
   clears; bad kind / long key refused; a ledger created by the previous schema
   (no table) reads as `[]` and gains the table on its first write; the
@@ -156,7 +180,8 @@ names in the table (bank text could otherwise carry terminal escapes).
 - `scripts/omakei-categorize.test.mjs`: a categorize write keeps marks.
 - `scripts/ledger-api.test.mjs`: `PUT` with bad marks → 400; shell injection
   with `$'` in a description stays inert.
-- `scripts/omakei-subscriptions.test.mjs`: CLI reads read-only, prints JSON.
+- `scripts/omakei-subscriptions.test.mjs`: CLI reads read-only, prints JSON,
+  labels a tagged series.
 
 ## Tuned on real data
 
@@ -165,6 +190,13 @@ merge. Two rules came from it: a wandering water bill was flagged as a price
 rise (now a rise needs a price that held), and a salon visited about monthly
 read as a variable bill (now variable amounts need a bill category).
 
+A second run (2026-10) found real subscriptions missing, each one already
+filed under `subscriptions` by the user: a streaming plan whose bank line
+changed shape for one month, a storage plan billed under a new code, and
+several app-store plans with only one or two charges. Three rules came from it:
+the domain key, the missed-period gap, and the tagged pass with its 13-month
+history.
+
 ## Open Questions
 
 1. **Bar widget.** A "≈ $X/mo recurring · 1 flagged" line in the popup would
@@ -172,4 +204,8 @@ read as a variable bill (now variable amounts need a bill category).
    out: the QML harness needs quickshell, and this is a glance feature in the
    editor first.
 2. **Biweekly and quarterly** cadences are not detected. Add a band row if real
-   data shows them.
+   data shows them. A tagged one is listed anyway, at the pace of its latest
+   gap or monthly.
+3. **One tagged charge** is assumed monthly, so a yearly plan seen once reads
+   as stopped after about seven weeks. It stays listed until it is 13 months
+   old.

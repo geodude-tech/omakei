@@ -73,7 +73,8 @@ export async function run(
   }
   const width = Math.min(32, Math.max(...subscriptions.map((s) => printable(s.merchant).length)));
   for (const s of subscriptions) {
-    const flags = s.flags.length ? `  [${s.flags.map(flagText).join(", ")}]` : "";
+    const notes = [...(s.confidence === "tagged" ? ["tagged"] : []), ...s.flags.map(flagText)];
+    const flags = notes.length ? `  [${notes.join(", ")}]` : "";
     out.write(
       `${printable(s.merchant).slice(0, 32).padEnd(width)}  ${s.cadence.padEnd(7)}  ${money(s.typical).padStart(9)}  ` +
         `${money(s.monthly).padStart(9)}/mo  last ${s.lastDate}${s.stopped ? "" : `  next ${s.nextDate}`}${flags}\n`,
